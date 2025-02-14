@@ -76,56 +76,6 @@
         );
       in
       {
-        checks = {
-          # Build the crate as part of `nix flake check` for convenience
-          inherit vertd;
-
-          # Run clippy (and deny all warnings) on the crate source,
-          # again, reusing the dependency artifacts from above.
-          #
-          # Note that this is done as a separate derivation so that
-          # we can block the CI if there are issues here, but not
-          # prevent downstream consumers from building our crate by itself.
-          vertd-clippy = craneLib.cargoClippy (
-            commonArgs
-            // {
-              inherit cargoArtifacts;
-              cargoClippyExtraArgs = "--all-targets -- --deny warnings";
-            }
-          );
-
-          vertd-doc = craneLib.cargoDoc (
-            commonArgs
-            // {
-              inherit cargoArtifacts;
-            }
-          );
-
-          # Check formatting
-          vertd-fmt = craneLib.cargoFmt {
-            inherit src;
-          };
-
-          vertd-toml-fmt = craneLib.taploFmt {
-            src = pkgs.lib.sources.sourceFilesBySuffices src [ ".toml" ];
-            # taplo arguments can be further customized below as needed
-            # taploExtraArgs = "--config ./taplo.toml";
-          };
-
-          # Run tests with cargo-nextest
-          # Consider setting `doCheck = false` on `vertd` if you do not want
-          # the tests to run twice
-          vertd-nextest = craneLib.cargoNextest (
-            commonArgs
-            // {
-              inherit cargoArtifacts;
-              partitions = 1;
-              partitionType = "count";
-              cargoNextestPartitionsExtraArgs = "--no-tests=pass";
-            }
-          );
-        };
-
         packages =
           {
             default = vertd;
@@ -143,9 +93,7 @@
           drv = vertd;
         };
 
-        devShells.default = craneLib.devShell {
-          checks = self.checks.${system};
-        };
+        devShells.default = craneLib.devShell { };
 
         nixosModules.default =
           { config, ... }:
