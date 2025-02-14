@@ -130,7 +130,7 @@
               description = "vertd video converter service";
               wantedBy = [ "multi-user.target" ];
               after = [ "network.target" ];
-              script = lib.getExe self.packages.${pkgs.system}.default;
+              path = [ pkgs.ffmpeg ];
               serviceConfig = {
                 User = "vertd";
                 Group = "vertd";
