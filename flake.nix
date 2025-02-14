@@ -24,7 +24,7 @@
       flake-utils,
       ...
     }:
-    flake-utils.lib.eachDefaultSystem (
+    (flake-utils.lib.eachDefaultSystem (
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
@@ -95,45 +95,52 @@
 
         devShells.default = craneLib.devShell { };
 
-        nixosModules.default =
-          { config, ... }:
-          let
-            inherit (lib)
-              mkEnableOption
-              mkIf
-              mkOption
-              types
-              ;
+      }
+    ))
+    // {
+      nixosModules.default =
+        {
+          config,
+          pkgs,
+          lib,
+          ...
+        }:
+        let
+          inherit (lib)
+            mkEnableOption
+            mkIf
+            mkOption
+            types
+            ;
 
-            cfg = config.services.vertd;
-          in
-          {
-            option.services.vertd = {
-              enable = mkEnableOption "vertd video converter service";
-              port = mkOption {
-                types = types.port;
-                description = "Port that vertd should listen to";
-                example = 8080;
-              };
+          cfg = config.services.vertd;
+        in
+        {
+          option.services.vertd = {
+            enable = mkEnableOption "vertd video converter service";
+            port = mkOption {
+              types = types.port;
+              description = "Port that vertd should listen to";
+              example = 8080;
             };
+          };
 
-            config = mkIf cfg.enable {
-              systemd.services.vertd = {
-                description = "vertd video converter service";
-                wantedBy = [ "multi-user.target" ];
-                after = [ "network.target" ];
-                script = lib.getExe vertd;
-                serviceConfig = {
-                  User = "vertd";
-                  Group = "vertd";
-                  Restart = "always";
-                  RestartSec = 5;
-                  ExecStartPre = "mkdir -p /var/lib/vertd; chown vertd:vertd /var/lib/vertd";
-                  WorkingDirectory = "/var/lib/vertd";
-                };
+          config = mkIf cfg.enable {
+            systemd.services.vertd = {
+              description = "vertd video converter service";
+              wantedBy = [ "multi-user.target" ];
+              after = [ "network.target" ];
+              script = lib.getExe self.packages.${pkgs.system}.vertd;
+              serviceConfig = {
+                User = "vertd";
+                Group = "vertd";
+                Restart = "always";
+                RestartSec = 5;
+                ExecStartPre = "mkdir -p /var/lib/vertd; chown vertd:vertd /var/lib/vertd";
+                WorkingDirectory = "/var/lib/vertd";
               };
             };
           };
-      }
-    );
+        };
+    };
 }
