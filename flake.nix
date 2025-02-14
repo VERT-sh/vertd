@@ -122,6 +122,7 @@
               type = types.port;
               description = "Port that vertd should listen to";
               example = 8080;
+              default = 24153;
             };
           };
 
@@ -131,6 +132,8 @@
               isSystemUser = true;
             };
             users.groups.vertd = { };
+
+            environment.sessionVariables.PORT = cfg.port;
 
             systemd.services.vertd = {
               description = "vertd video converter service";
@@ -145,6 +148,7 @@
                 ExecStart = lib.getExe self.packages.${pkgs.system}.default;
                 StateDirectory = "vertd";
                 WorkingDirectory = "/var/lib/vertd";
+                Environment = "PORT=${builtins.toString cfg.port}";
               };
             };
           };
