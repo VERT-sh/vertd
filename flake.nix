@@ -126,6 +126,12 @@
           };
 
           config = mkIf cfg.enable {
+            users.users.vertd = {
+              group = "vertd";
+              isSystemUser = true;
+            };
+            users.groups.vertd = { };
+
             systemd.services.vertd = {
               description = "vertd video converter service";
               wantedBy = [ "multi-user.target" ];
@@ -136,7 +142,8 @@
                 Group = "vertd";
                 Restart = "always";
                 RestartSec = 5;
-                ExecStartPre = "mkdir -p /var/lib/vertd; chown vertd:vertd /var/lib/vertd";
+                ExecStart = lib.getExe self.packages.${pkgs.system}.default;
+                StateDirectory = "vertd";
                 WorkingDirectory = "/var/lib/vertd";
               };
             };
