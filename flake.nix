@@ -116,10 +116,10 @@
           cfg = config.services.vertd;
         in
         {
-          option.services.vertd = {
+          options.services.vertd = {
             enable = mkEnableOption "vertd video converter service";
             port = mkOption {
-              types = types.port;
+              type = types.port;
               description = "Port that vertd should listen to";
               example = 8080;
             };
@@ -130,7 +130,7 @@
               description = "vertd video converter service";
               wantedBy = [ "multi-user.target" ];
               after = [ "network.target" ];
-              script = lib.getExe self.packages.${pkgs.system}.vertd;
+              script = lib.getExe self.packages.${pkgs.system}.default;
               serviceConfig = {
                 User = "vertd";
                 Group = "vertd";
