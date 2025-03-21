@@ -21,6 +21,15 @@ impl JobTrait for CompressionJob {
     fn id(&self) -> Uuid {
         self.id
     }
+
+    fn handle_ws(
+        &self,
+        session: actix_ws::Session,
+        stream: actix_ws::AggregatedMessageStream,
+        shutdown: std::sync::Arc<tokio::sync::Notify>,
+    ) {
+        todo!("implement handle_ws for CompressionJob")
+    }
 }
 
 impl CompressionJob {

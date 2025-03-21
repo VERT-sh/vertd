@@ -35,6 +35,15 @@ impl JobTrait for ConversionJob {
     fn auth(&self) -> &str {
         &self.auth
     }
+
+    fn handle_ws(
+        &self,
+        session: actix_ws::Session,
+        stream: actix_ws::AggregatedMessageStream,
+        shutdown: std::sync::Arc<tokio::sync::Notify>,
+    ) {
+        todo!("implement handle_ws for ConversionJob");
+    }
 }
 
 impl ConversionJob {

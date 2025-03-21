@@ -1,10 +1,14 @@
 pub mod gpu;
 pub mod types;
 
+use std::sync::Arc;
+
+use actix_ws::{AggregatedMessageStream, Session};
 use enum_dispatch::enum_dispatch;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 use strum_macros::AsRefStr;
+use tokio::sync::Notify;
 use types::{CompressionJob as Compression, ConversionJob as Conversion};
 use uuid::Uuid;
 
@@ -29,4 +33,5 @@ pub enum JobType {
 pub trait JobTrait: Clone {
     fn id(&self) -> Uuid;
     fn auth(&self) -> &str;
+    fn handle_ws(&self, session: Session, stream: AggregatedMessageStream, shutdown: Arc<Notify>);
 }
