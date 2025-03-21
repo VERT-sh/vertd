@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 use uuid::Uuid;
 
+use crate::job::JobTrait;
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[skip_serializing_none]
@@ -9,6 +11,16 @@ pub struct CompressionJob {
     pub id: Uuid,
     pub auth: String,
     pub target_size_mb: Option<u32>,
+}
+
+impl JobTrait for CompressionJob {
+    fn auth(&self) -> &str {
+        &self.auth
+    }
+
+    fn id(&self) -> Uuid {
+        self.id
+    }
 }
 
 impl CompressionJob {

@@ -2,7 +2,7 @@ use crate::{
     http::response::ApiResponse,
     job::{
         types::{CompressionJob, ConversionJob, ConverterFormat},
-        Job, JobType,
+        Job, JobTrait as _, JobType,
     },
     state::APP_STATE,
 };
@@ -63,7 +63,7 @@ pub async fn upload(
 ) -> Result<impl Responder, UploadError> {
     let mut app_state = APP_STATE.lock().await;
 
-    let (id, job) = match form.json.job_type {
+    let (id, job): (_, Job) = match form.json.job_type {
         JobType::Conversion => {
             let filename = form.file.file_name.ok_or_else(|| UploadError::NoFilename)?;
             let ext = filename
@@ -96,18 +96,19 @@ pub async fn upload(
             .map_err(|_| UploadError::GetChunk)?
             .await;
             fs::write(format!("input/{}.{}", job.id, ext), &buf).await?;
-            log::info!("uploaded conversion job {}", job.id);
-            (job.id, Job::Conversion(job))
+            (job.id, job.into())
         }
 
         JobType::Compression => {
             let rand: [u8; 64] = rand::random();
             let token = hex::encode(rand);
             let job = CompressionJob::new(token);
-            log::info!("uploaded compression job {}", job.id);
-            (job.id, Job::Compression(job))
+            (job.id, job.into())
         }
     };
+
+    let job_type = job.as_ref().to_lowercase();
+    log::info!("uploaded {} job {}", job_type, job.id());
 
     app_state.jobs.insert(id, job.clone());
 

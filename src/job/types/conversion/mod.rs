@@ -8,6 +8,8 @@ use serde_with::skip_serializing_none;
 use tokio::process::Command;
 use uuid::Uuid;
 
+use crate::job::JobTrait;
+
 const DEFAULT_BITRATE: u64 = 4 * 1_000_000;
 const BITRATE_MULTIPLIER: f64 = 2.5;
 
@@ -23,6 +25,16 @@ pub struct ConversionJob {
     total_frames: Option<u64>,
     bitrate: Option<u64>,
     fps: Option<u32>,
+}
+
+impl JobTrait for ConversionJob {
+    fn id(&self) -> Uuid {
+        self.id
+    }
+
+    fn auth(&self) -> &str {
+        &self.auth
+    }
 }
 
 impl ConversionJob {

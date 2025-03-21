@@ -1,26 +1,21 @@
 pub mod gpu;
 pub mod types;
 
+use enum_dispatch::enum_dispatch;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
-use types::{CompressionJob, ConversionJob};
+use strum_macros::AsRefStr;
+use types::{CompressionJob as Compression, ConversionJob as Conversion};
+use uuid::Uuid;
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[enum_dispatch]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, AsRefStr)]
 #[serde(rename_all = "camelCase")]
 #[serde(tag = "type")]
 #[skip_serializing_none]
 pub enum Job {
-    Conversion(ConversionJob),
-    Compression(CompressionJob),
-}
-
-impl Into<JobType> for Job {
-    fn into(self) -> JobType {
-        match self {
-            Job::Conversion(_) => JobType::Conversion,
-            Job::Compression(_) => JobType::Compression,
-        }
-    }
+    Conversion,
+    Compression,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -28,4 +23,10 @@ impl Into<JobType> for Job {
 pub enum JobType {
     Conversion,
     Compression,
+}
+
+#[enum_dispatch(Job)]
+pub trait JobTrait: Clone {
+    fn id(&self) -> Uuid;
+    fn auth(&self) -> &str;
 }
