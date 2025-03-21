@@ -1,7 +1,7 @@
 use crate::{
     http::response::ApiResponse,
     job::{
-        types::{ConversionJob, ConverterFormat},
+        types::{CompressionJob, ConversionJob, ConverterFormat},
         Job, JobType,
     },
     state::APP_STATE,
@@ -14,8 +14,6 @@ use tokio::fs;
 
 #[derive(Debug, thiserror::Error)]
 pub enum UploadError {
-    #[error("no file uploaded")]
-    NoFile,
     #[error("failed to get field")]
     GetField(#[from] actix_multipart::MultipartError),
     #[error("no filename provided")]
@@ -85,7 +83,7 @@ pub async fn upload(
 
             let rand: [u8; 64] = rand::random();
             let token = hex::encode(rand);
-            let our_job = ConversionJob::new(token, ext.to_string());
+            let job = ConversionJob::new(token, ext.to_string());
             let buf = tokio::task::spawn_blocking(async move || {
                 let mut buf = Vec::with_capacity(form.file.size);
                 let mut reader = form.file.file;
@@ -97,12 +95,18 @@ pub async fn upload(
             .await
             .map_err(|_| UploadError::GetChunk)?
             .await;
-            fs::write(format!("input/{}.{}", our_job.id, ext), &buf).await?;
-            log::info!("uploaded conversion job id: {}", our_job.id);
-            (our_job.id, Job::Conversion(our_job))
+            fs::write(format!("input/{}.{}", job.id, ext), &buf).await?;
+            log::info!("uploaded conversion job {}", job.id);
+            (job.id, Job::Conversion(job))
         }
 
-        JobType::Compression => todo!("compression"),
+        JobType::Compression => {
+            let rand: [u8; 64] = rand::random();
+            let token = hex::encode(rand);
+            let job = CompressionJob::new(token);
+            log::info!("uploaded compression job {}", job.id);
+            (job.id, Job::Compression(job))
+        }
     };
 
     app_state.jobs.insert(id, job.clone());
