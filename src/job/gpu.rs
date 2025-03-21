@@ -4,14 +4,14 @@ use std::fmt::{self, Display, Formatter};
 use tokio::process::Command;
 use wgpu::Instance;
 
-pub enum ConverterGPU {
+pub enum JobGPU {
     AMD,
     Intel,
     NVIDIA,
     Apple,
 }
 
-impl ConverterGPU {
+impl JobGPU {
     pub async fn get_accelerated_codec(&self, codec: &str) -> anyhow::Result<String> {
         let priority = self.encoder_priority();
         let encoders = Command::new("ffmpeg")
@@ -32,21 +32,21 @@ impl ConverterGPU {
 
     pub fn encoder_priority(&self) -> Vec<&str> {
         match self {
-            ConverterGPU::AMD => vec!["amf"],
-            ConverterGPU::Intel => vec!["qsv"],
-            ConverterGPU::NVIDIA => vec!["nvenc"],
-            ConverterGPU::Apple => vec!["videotoolbox"],
+            JobGPU::AMD => vec!["amf"],
+            JobGPU::Intel => vec!["qsv"],
+            JobGPU::NVIDIA => vec!["nvenc"],
+            JobGPU::Apple => vec!["videotoolbox"],
         }
     }
 }
 
-impl Display for ConverterGPU {
+impl Display for JobGPU {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            ConverterGPU::AMD => write!(f, "AMD"),
-            ConverterGPU::Intel => write!(f, "Intel"),
-            ConverterGPU::NVIDIA => write!(f, "NVIDIA"),
-            ConverterGPU::Apple => write!(f, "Apple"),
+            JobGPU::AMD => write!(f, "AMD"),
+            JobGPU::Intel => write!(f, "Intel"),
+            JobGPU::NVIDIA => write!(f, "NVIDIA"),
+            JobGPU::Apple => write!(f, "Apple"),
         }
     }
 }
@@ -57,7 +57,7 @@ async fn is_docker() -> bool {
     dockerenv || cgroup
 }
 
-pub async fn get_gpu() -> anyhow::Result<ConverterGPU> {
+pub async fn get_gpu() -> anyhow::Result<JobGPU> {
     let instance = Instance::default();
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
@@ -70,16 +70,16 @@ pub async fn get_gpu() -> anyhow::Result<ConverterGPU> {
 
     let info = adapter.get_info();
     if info.name.contains("Apple") {
-        return Ok(ConverterGPU::Apple);
+        return Ok(JobGPU::Apple);
     }
     match info.vendor {
-        0x10DE => Ok(ConverterGPU::NVIDIA),
-        0x1022 => Ok(ConverterGPU::AMD),
-        0x8086 => Ok(ConverterGPU::Intel), // fun fact: intel's vendor id is 0x8086, presumably in reference to the intel 8086 processor
-        0x106B | 0x0 => Ok(ConverterGPU::Apple),
+        0x10DE => Ok(JobGPU::NVIDIA),
+        0x1022 => Ok(JobGPU::AMD),
+        0x8086 => Ok(JobGPU::Intel), // fun fact: intel's vendor id is 0x8086, presumably in reference to the intel 8086 processor
+        0x106B | 0x0 => Ok(JobGPU::Apple),
         0x10005 if is_docker().await => {
             warn!("are you in a docker container? assuming NVIDIA, please open a PR and fix this if you're not.");
-            Ok(ConverterGPU::NVIDIA)
+            Ok(JobGPU::NVIDIA)
         }
         _ => Err(anyhow!("unknown GPU vendor: 0x{:X}", info.vendor)),
     }

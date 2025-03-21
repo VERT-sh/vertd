@@ -1,7 +1,9 @@
 use log::warn;
 use serde::{Deserialize, Serialize};
 
-use super::{format::ConverterFormat, gpu::ConverterGPU};
+use crate::job::gpu::JobGPU;
+
+use super::format::ConverterFormat;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,7 +28,7 @@ impl ConversionSpeed {
         }
     }
 
-    pub fn to_args(&self, to: &ConverterFormat, gpu: &ConverterGPU, bitrate: u64) -> Vec<String> {
+    pub fn to_args(&self, to: &ConverterFormat, gpu: &JobGPU, bitrate: u64) -> Vec<String> {
         let mut args = Vec::new();
 
         match to {
@@ -36,7 +38,7 @@ impl ConversionSpeed {
             | ConverterFormat::MTS => {
                 args.push("-preset".to_string());
                 match gpu {
-                    ConverterGPU::NVIDIA => match self {
+                    JobGPU::NVIDIA => match self {
                         // only "slow", "medium", and "fast" are supported
                         ConversionSpeed::VerySlow | ConversionSpeed::Slower => {
                             args.push("slow".to_string())

@@ -7,7 +7,7 @@ const BITRATE_MULTIPLIER: f64 = 2.5;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Job {
+pub struct ConversionJob {
     pub id: Uuid,
     pub auth: String,
     pub from: String,
@@ -18,7 +18,7 @@ pub struct Job {
     fps: Option<u32>,
 }
 
-impl Job {
+impl ConversionJob {
     pub fn new(auth_token: String, from: String) -> Self {
         Self {
             id: Uuid::new_v4(),
@@ -142,7 +142,6 @@ impl Job {
             .output()
             .await?;
 
-        // its  gonna look like "30000/1001"
         let fps = String::from_utf8(output.stdout)
             .map_err(|e| anyhow::anyhow!("failed to parse fps: {}", e))?;
 
@@ -169,15 +168,4 @@ impl Job {
         let (bitrate, fps) = (self.bitrate().await?, self.fps().await?);
         Ok((bitrate, fps))
     }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type", content = "data", rename_all = "camelCase")]
-pub enum ProgressUpdate {
-    #[serde(rename = "frame", rename_all = "camelCase")]
-    Frame(u64),
-    #[serde(rename = "fps", rename_all = "camelCase")]
-    FPS(f64),
-    #[serde(rename = "error", rename_all = "camelCase")]
-    Error(String),
 }

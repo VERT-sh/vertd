@@ -1,5 +1,8 @@
-use super::{gpu::ConverterGPU, speed::ConversionSpeed};
 use strum_macros::{Display, EnumString};
+
+use crate::job::gpu::JobGPU;
+
+use super::speed::ConversionSpeed;
 
 #[derive(Clone, Copy, Debug, PartialEq, EnumString, Display)]
 #[strum(serialize_all = "lowercase")]
@@ -18,7 +21,7 @@ impl ConverterFormat {
     pub fn conversion_into_args(
         &self,
         speed: &ConversionSpeed,
-        gpu: &ConverterGPU,
+        gpu: &JobGPU,
         bitrate: u64,
     ) -> Vec<String> {
         speed.to_args(self, gpu, bitrate)
@@ -37,7 +40,7 @@ impl Conversion {
 
     async fn accelerated_or_default_codec(
         &self,
-        gpu: &ConverterGPU,
+        gpu: &JobGPU,
         codecs: &[&str],
         default: &str,
     ) -> String {
@@ -52,7 +55,7 @@ impl Conversion {
     pub async fn to_args(
         &self,
         speed: &ConversionSpeed,
-        gpu: &ConverterGPU,
+        gpu: &JobGPU,
         bitrate: u64,
         fps: u32,
     ) -> anyhow::Result<Vec<String>> {

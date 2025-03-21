@@ -1,10 +1,7 @@
-// get /download/{id} where id is Uuid
-
 use actix_web::{get, web, HttpResponse, Responder, ResponseError};
-use tokio::fs;
 use uuid::Uuid;
 
-use crate::{http::response::ApiResponse, state::APP_STATE};
+use crate::http::response::ApiResponse;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DownloadError {
@@ -33,46 +30,5 @@ impl ResponseError for DownloadError {
 
 #[get("/download/{id}/{token}")]
 pub async fn download(path: web::Path<(Uuid, String)>) -> Result<impl Responder, DownloadError> {
-    let (id, token) = path.into_inner();
-    let app_state = APP_STATE.lock().await;
-    let job = app_state
-        .jobs
-        .get(&id)
-        .ok_or(DownloadError::JobNotFound)?
-        .clone();
-    drop(app_state);
-
-    if job.auth != token {
-        return Err(DownloadError::InvalidToken);
-    }
-
-    let file_path = match job.to {
-        Some(to) => format!("output/{}.{}", id, to),
-        None => return Err(DownloadError::IncompleteHandshake),
-    };
-
-    let mut app_state = APP_STATE.lock().await;
-    app_state.jobs.remove(&id);
-    drop(app_state);
-
-    let bytes = fs::read(&file_path).await.map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            DownloadError::JobNotFound
-        } else {
-            DownloadError::FilesystemError(e)
-        }
-    })?;
-
-    let mime = mime_guess::from_path(&file_path)
-        .first_or_octet_stream()
-        .to_string();
-
-    fs::remove_file(file_path)
-        .await
-        .map_err(|e| DownloadError::FilesystemError(e))?;
-
-    Ok(HttpResponse::Ok()
-        .insert_header(("Content-Type", mime))
-        .insert_header(("Content-Length", bytes.len()))
-        .body(bytes))
+    Ok(ApiResponse::Success(()))
 }

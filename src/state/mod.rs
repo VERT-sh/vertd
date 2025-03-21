@@ -1,10 +1,8 @@
-use std::{collections::HashMap, sync::Arc};
-
+use crate::job::Job;
 use lazy_static::lazy_static;
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 use uuid::Uuid;
-
-use crate::converter::job::Job;
 
 pub struct AppState {
     pub jobs: HashMap<Uuid, Job>,

@@ -1,13 +1,13 @@
-mod converter;
 mod http;
+mod job;
 mod state;
 
 use std::{process::exit, time::Duration};
 
-use converter::gpu::get_gpu;
 use dotenv::dotenv;
 use env_logger::Env;
 use http::start_http;
+use job::gpu::{get_gpu, JobGPU};
 use log::{error, info};
 use tokio::fs;
 
@@ -71,8 +71,8 @@ async fn main() -> anyhow::Result<()> {
         Ok(gpu) => info!(
             "detected a{} {} GPU -- if this isn't your vendor, open an issue.",
             match gpu {
-                converter::gpu::ConverterGPU::AMD => "n",
-                converter::gpu::ConverterGPU::Apple => "n",
+                JobGPU::AMD => "n",
+                JobGPU::Apple => "n",
                 _ => "",
             },
             gpu

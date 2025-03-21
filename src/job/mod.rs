@@ -1,35 +1,26 @@
-pub mod compression;
-pub mod conversion;
+pub mod gpu;
+pub mod types;
 
-use compression::CompressionJob;
-use conversion::ConversionJob;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use types::{CompressionJob, ConversionJob};
 
-pub trait JobTrait {
-    fn id(&self) -> Uuid;
-    fn auth(&self) -> &str;
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
 pub enum Job {
     Conversion(ConversionJob),
     Compression(CompressionJob),
 }
 
-impl JobTrait for Job {
-    fn id(&self) -> Uuid {
+impl Into<JobType> for Job {
+    fn into(self) -> JobType {
         match self {
-            Job::Conversion(job) => job.id(),
-            Job::Compression(job) => job.id(),
+            Job::Conversion(_) => JobType::Conversion,
+            Job::Compression(_) => JobType::Compression,
         }
     }
+}
 
-    fn auth(&self) -> &str {
-        match self {
-            Job::Conversion(job) => job.auth(),
-            Job::Compression(job) => job.auth(),
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum JobType {
+    Conversion,
+    Compression,
 }
