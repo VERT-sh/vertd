@@ -1,8 +1,11 @@
 use actix_web::{HttpResponse, Responder};
 use serde::Serialize;
+use serde_with::skip_serializing_none;
 
 #[derive(Serialize)]
 #[serde(tag = "type", content = "data")]
+#[serde(rename_all = "camelCase")]
+#[skip_serializing_none]
 pub enum ApiResponse<T> {
     #[serde(rename = "success")]
     Success(T),

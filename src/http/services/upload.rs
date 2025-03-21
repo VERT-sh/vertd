@@ -65,7 +65,7 @@ pub async fn upload(
 ) -> Result<impl Responder, UploadError> {
     let mut app_state = APP_STATE.lock().await;
 
-    match form.json.job_type {
+    let (id, job) = match form.json.job_type {
         JobType::Conversion => {
             let filename = form.file.file_name.ok_or_else(|| UploadError::NoFilename)?;
             let ext = filename
@@ -99,11 +99,13 @@ pub async fn upload(
             .await;
             fs::write(format!("input/{}.{}", our_job.id, ext), &buf).await?;
             log::info!("uploaded conversion job id: {}", our_job.id);
-            app_state.jobs.insert(our_job.id, Job::Conversion(our_job));
+            (our_job.id, Job::Conversion(our_job))
         }
 
-        JobType::Compression => todo!("compression not implemented yet"),
+        JobType::Compression => todo!("compression"),
     };
 
-    Ok(ApiResponse::Success(()))
+    app_state.jobs.insert(id, job.clone());
+
+    Ok(ApiResponse::Success(job))
 }
