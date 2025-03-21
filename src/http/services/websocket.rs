@@ -11,27 +11,6 @@ use crate::{
     state::APP_STATE,
 };
 
-macro_rules! websocket_thread {
-    ($shutdown:expr, {$($tt:tt)*}) => {
-        {
-            let shutdown = Arc::clone(&$shutdown);
-            rt::spawn(async move {
-                let notified = shutdown.notified();
-                tokio::pin!(notified);
-                'outer: loop {
-                    tokio::select! {
-                        _ = &mut notified => {
-                            break 'outer;
-                        },
-
-                        $($tt)*
-                    }
-                }
-            });
-        }
-    };
-}
-
 macro_rules! send_message {
     ($session:expr, $msg:expr) => {{
         let msg: String = $msg.into();
@@ -41,7 +20,6 @@ macro_rules! send_message {
 
 #[get("/ws")]
 pub async fn websocket(req: HttpRequest, body: web::Payload) -> actix_web::Result<impl Responder> {
-    let shutdown = Arc::new(Notify::new());
     let (response, mut session, stream) = actix_ws::handle(&req, body)?;
     let mut stream = stream
         .aggregate_continuations()
@@ -60,7 +38,7 @@ pub async fn websocket(req: HttpRequest, body: web::Payload) -> actix_web::Resul
         }
         let job = job.ok_or_else(|| anyhow::anyhow!("no job found"))?;
         log::info!("job found: {}", job.id());
-        handle_job(job, shutdown, session, stream).await?;
+        handle_job(job, session, stream).await?;
         Ok::<(), anyhow::Error>(())
     });
     Ok(response)
@@ -68,11 +46,10 @@ pub async fn websocket(req: HttpRequest, body: web::Payload) -> actix_web::Resul
 
 async fn handle_job(
     job: Job,
-    shutdown: Arc<Notify>,
     session: actix_ws::Session,
     stream: actix_ws::AggregatedMessageStream,
 ) -> anyhow::Result<()> {
-    job.handle_ws(session, stream, shutdown);
+    job.handle_ws(session, stream);
     Ok(())
 }
 

@@ -36,12 +36,7 @@ impl JobTrait for ConversionJob {
         &self.auth
     }
 
-    fn handle_ws(
-        &self,
-        session: actix_ws::Session,
-        stream: actix_ws::AggregatedMessageStream,
-        shutdown: std::sync::Arc<tokio::sync::Notify>,
-    ) {
+    fn handle_ws(&self, session: actix_ws::Session, stream: actix_ws::AggregatedMessageStream) {
         todo!("implement handle_ws for ConversionJob");
     }
 }
