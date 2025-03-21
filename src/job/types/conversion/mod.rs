@@ -2,10 +2,9 @@ mod format;
 mod speed;
 
 pub use format::*;
+
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
-pub use speed::*;
-
 use tokio::process::Command;
 use uuid::Uuid;
 
