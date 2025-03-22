@@ -3,7 +3,6 @@ pub mod types;
 
 use actix_ws::{AggregatedMessageStream, Session};
 use enum_dispatch::enum_dispatch;
-use gpu::JobGPU;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 use strum_macros::AsRefStr;

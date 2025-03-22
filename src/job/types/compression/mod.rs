@@ -1,10 +1,8 @@
 mod compressor;
 mod format;
 
-use std::env;
-
 use crate::{
-    job::{get_fps, get_total_frames, gpu::get_gpu, JobTrait},
+    job::{get_total_frames, JobTrait},
     send_message,
     state::APP_STATE,
     wait_for_message, OUTPUT_LIFETIME,
@@ -13,7 +11,7 @@ use compressor::{first_pass, second_pass, ProgressUpdate};
 pub use format::*;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
-use tokio::{fs, process::Command};
+use tokio::fs;
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -197,16 +195,5 @@ impl CompressionJob {
 
         self.total_frames = Some(total_frames);
         Ok(total_frames)
-    }
-
-    pub async fn fps(&mut self) -> anyhow::Result<u32> {
-        if let Some(fps) = self.fps {
-            return Ok(fps);
-        }
-
-        let fps = get_fps(format!("input/{}.{}", self.id, self.format)).await?;
-
-        self.fps = Some(fps);
-        Ok(fps)
     }
 }

@@ -136,12 +136,6 @@ pub async fn second_pass(
 ) -> anyhow::Result<mpsc::Receiver<ProgressUpdate>> {
     let (tx, rx) = mpsc::channel(64);
     let gpu = get_gpu().await?;
-    let null = if env::consts::OS == "windows" {
-        "nul".to_string()
-    } else {
-        "/dev/null".to_string()
-    };
-
     let encoder = job.format.codec(&gpu).await;
 
     let mut process = Command::new("ffmpeg")

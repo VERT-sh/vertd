@@ -4,11 +4,9 @@ mod speed;
 
 use std::collections::BTreeMap;
 
-use actix_ws::AggregatedMessage;
 use converter::{Converter, ProgressUpdate};
 use discord_webhook2::{message, webhook::DiscordWebhook};
 pub use format::*;
-use futures_util::StreamExt as _;
 use speed::ConversionSpeed;
 
 use crate::{
