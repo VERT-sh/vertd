@@ -38,20 +38,6 @@ impl Conversion {
         Self { from, to }
     }
 
-    async fn accelerated_or_default_codec(
-        &self,
-        gpu: &JobGPU,
-        codecs: &[&str],
-        default: &str,
-    ) -> String {
-        for codec in codecs {
-            if let Ok(encoder) = gpu.get_accelerated_codec(codec).await {
-                return encoder;
-            }
-        }
-        default.to_string()
-    }
-
     pub async fn to_args(
         &self,
         speed: &ConversionSpeed,
@@ -64,9 +50,7 @@ impl Conversion {
             | ConverterFormat::MKV
             | ConverterFormat::MOV
             | ConverterFormat::MTS => {
-                let encoder = self
-                    .accelerated_or_default_codec(gpu, &["h264"], "libx264")
-                    .await;
+                let encoder = gpu.accelerated_or_default_codec(&["h264"], "libx264").await;
                 vec![
                     "-c:v".to_string(),
                     encoder,
@@ -88,8 +72,8 @@ impl Conversion {
             }
 
             ConverterFormat::WMV => {
-                let encoder = self
-                    .accelerated_or_default_codec(gpu, &["wmv2", "wmv3"], "wmv2")
+                let encoder = gpu
+                    .accelerated_or_default_codec(&["wmv2", "wmv3"], "wmv2")
                     .await;
                 vec![
                     "-c:v".to_string(),
@@ -99,8 +83,8 @@ impl Conversion {
                 ]
             }
             ConverterFormat::WebM => {
-                let encoder = self
-                    .accelerated_or_default_codec(gpu, &["av1", "vp9", "vp8"], "libvpx")
+                let encoder = gpu
+                    .accelerated_or_default_codec(&["av1", "vp9", "vp8"], "libvpx")
                     .await;
                 vec![
                     "-c:v".to_string(),

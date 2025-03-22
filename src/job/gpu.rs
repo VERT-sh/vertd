@@ -38,6 +38,15 @@ impl JobGPU {
             JobGPU::Apple => vec!["videotoolbox"],
         }
     }
+
+    pub async fn accelerated_or_default_codec(&self, codecs: &[&str], default: &str) -> String {
+        for codec in codecs {
+            if let Ok(encoder) = self.get_accelerated_codec(codec).await {
+                return encoder;
+            }
+        }
+        default.to_string()
+    }
 }
 
 impl Display for JobGPU {

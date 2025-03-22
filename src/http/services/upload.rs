@@ -1,7 +1,7 @@
 use crate::{
     http::response::ApiResponse,
     job::{
-        types::{CompressionJob, ConversionJob, ConverterFormat},
+        types::{CompressionJob, CompressorFormat, ConversionJob, ConverterFormat},
         Job, JobTrait as _, JobType,
     },
     state::APP_STATE,
@@ -20,7 +20,7 @@ pub enum UploadError {
     NoFilename,
     #[error("missing file extension")]
     NoExtension,
-    #[error("invalid file extension: {0}. allowed: jpg, png, gif")]
+    #[error("invalid file extension: {0}.")]
     InvalidExtension(String),
     #[error("failed to read file data")]
     GetChunk,
@@ -63,62 +63,63 @@ pub async fn upload(
 ) -> Result<impl Responder, UploadError> {
     let mut app_state = APP_STATE.lock().await;
 
-    let (id, job): (_, Job) = match form.json.job_type {
+    let filename = form.file.file_name.ok_or_else(|| UploadError::NoFilename)?;
+    let ext = filename
+        .split('.')
+        .last()
+        .and_then(|ext| {
+            Some(
+                ext.chars()
+                    .filter(|c| c.is_alphanumeric())
+                    .collect::<String>(),
+            )
+        })
+        .ok_or_else(|| UploadError::NoExtension)?;
+
+    let buf = tokio::task::spawn_blocking(async move || {
+        let mut buf = Vec::with_capacity(form.file.size);
+        let mut reader = form.file.file;
+        reader
+            .read_to_end(&mut buf)
+            .expect("failed to read file data");
+        buf
+    })
+    .await
+    .map_err(|_| UploadError::GetChunk)?
+    .await;
+
+    let rand: [u8; 64] = rand::random();
+    let token = hex::encode(rand);
+
+    let (id, mut job): (_, Job) = match form.json.job_type {
         JobType::Conversion => {
-            let filename = form.file.file_name.ok_or_else(|| UploadError::NoFilename)?;
-            let ext = filename
-                .split('.')
-                .last()
-                .and_then(|ext| {
-                    Some(
-                        ext.chars()
-                            .filter(|c| c.is_alphanumeric())
-                            .collect::<String>(),
-                    )
-                })
-                .ok_or_else(|| UploadError::NoExtension)?;
             let ext = ext
                 .parse::<ConverterFormat>()
-                .map_err(|_| UploadError::InvalidExtension(ext))?;
-
-            let rand: [u8; 64] = rand::random();
-            let token = hex::encode(rand);
+                .map_err(|_| UploadError::InvalidExtension(ext.to_string()))?;
             let mut job = ConversionJob::new(token, ext.to_string());
-            let buf = tokio::task::spawn_blocking(async move || {
-                let mut buf = Vec::with_capacity(form.file.size);
-                let mut reader = form.file.file;
-                reader
-                    .read_to_end(&mut buf)
-                    .expect("failed to read file data");
-                buf
-            })
-            .await
-            .map_err(|_| UploadError::GetChunk)?
-            .await;
-            fs::write(format!("input/{}.{}", job.id, ext), &buf).await?;
             job.total_frames().await?;
             (job.id, job.into())
         }
 
         JobType::Compression => {
-            let rand: [u8; 64] = rand::random();
-            let token = hex::encode(rand);
-            let filename = form.file.file_name.ok_or_else(|| UploadError::NoFilename)?;
-            let ext = filename
-                .split('.')
-                .last()
-                .and_then(|ext| {
-                    Some(
-                        ext.chars()
-                            .filter(|c| c.is_alphanumeric())
-                            .collect::<String>(),
-                    )
-                })
-                .ok_or_else(|| UploadError::NoExtension)?;
+            let ext = ext
+                .parse::<CompressorFormat>()
+                .map_err(|_| UploadError::InvalidExtension(ext.to_string()))?;
             let job = CompressionJob::new(token, ext);
             (job.id, job.into())
         }
     };
+
+    fs::write(format!("input/{}.{}", id, ext), &buf).await?;
+
+    match job {
+        Job::Compression(ref mut job) => {
+            job.total_frames().await?;
+        }
+        Job::Conversion(ref mut job) => {
+            job.total_frames().await?;
+        }
+    }
 
     let job_type = job.as_ref().to_lowercase();
     log::info!("uploaded {} job {}", job_type, job.id());

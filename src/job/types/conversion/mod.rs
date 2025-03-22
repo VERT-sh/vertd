@@ -12,10 +12,10 @@ use futures_util::StreamExt as _;
 use speed::ConversionSpeed;
 
 use crate::{
-    job::JobTrait,
+    job::{get_fps, get_total_frames, JobTrait},
     send_message,
     state::APP_STATE,
-    OUTPUT_LIFETIME,
+    wait_for_message, OUTPUT_LIFETIME,
 };
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "camelCase")]
-pub enum Message {
+enum Message {
     #[serde(rename = "startJob", rename_all = "camelCase")]
     StartJob { to: String, speed: ConversionSpeed },
 
@@ -75,33 +75,8 @@ impl JobTrait for ConversionJob {
         mut session: actix_ws::Session,
         mut stream: actix_ws::AggregatedMessageStream,
     ) -> anyhow::Result<()> {
-        // wait till we receive a message where Message::StartJob
-        let mut message = None;
-        while let Some(Ok(msg)) = stream.next().await {
-            match msg {
-                AggregatedMessage::Ping(b) => {
-                    session.pong(&b).await?;
-                }
-
-                AggregatedMessage::Text(text) => {
-                    let msg: Message = serde_json::from_str(&text)?;
-                    if matches!(msg, Message::StartJob { .. }) {
-                        message = Some(msg);
-                        break;
-                    } else {
-                        log::error!("Invalid message: {:?}", msg);
-                    }
-                }
-
-                _ => {}
-            }
-        }
-
-        let Message::StartJob { to, speed } =
-            message.ok_or_else(|| anyhow::anyhow!("no message found"))?
-        else {
-            return Err(anyhow::anyhow!("no message found"));
-        };
+        let (speed, to) =
+            wait_for_message!(stream, session, Message::StartJob { speed, to } => speed, to)?;
 
         let from = self.from.parse::<ConverterFormat>()?;
         let to = to.parse::<ConverterFormat>()?;
@@ -239,56 +214,9 @@ impl ConversionJob {
             return Ok(total_frames);
         }
 
-        let output = Command::new("ffprobe")
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=avg_frame_rate,duration",
-                "-of",
-                "default=nokey=1:noprint_wrappers=1",
-                &format!("input/{}.{}", self.id, self.from),
-            ])
-            .output()
-            .await?;
+        let total_frames = get_total_frames(format!("input/{}.{}", self.id, self.from)).await?;
 
-        let output_str = String::from_utf8(output.stdout)?;
-        let mut lines = output_str.lines();
-
-        let avg_frame_rate = lines.next()
-            .unwrap_or("60/1")
-            .trim()
-            .split('/')
-            .map(|s| s.parse::<f64>().map_err(|_| anyhow::anyhow!("Invalid Frame Rate - Please check if your file is not corrupted or damaged")))
-            .collect::<Result<Vec<f64>, _>>() // Collect results and return an error if any parsing fails
-            .and_then(|nums| {
-                if nums.len() == 2 && nums[1] != 0.0 {
-                    Ok(nums[0] / nums[1])
-                } else {
-                    Err(anyhow::anyhow!("Invalid Frame Rate - Please check if your file is not corrupted or damaged"))
-                }
-            })?;
-
-        let duration = lines
-            .next()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Missing Duration - Please check if your file is not corrupted or damaged"
-                )
-            })?
-            .trim()
-            .parse::<f64>()
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "Invalid Duration - Please check if your file is not corrupted or damaged"
-                )
-            })?;
-
-        let total_frames = (avg_frame_rate * duration).ceil() as u64;
         self.total_frames = Some(total_frames);
-
         Ok(total_frames)
     }
 
@@ -297,38 +225,7 @@ impl ConversionJob {
             return Ok(fps);
         }
 
-        let output = Command::new("ffprobe")
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=r_frame_rate",
-                "-of",
-                "default=nokey=1:noprint_wrappers=1",
-                &format!("input/{}.{}", self.id, self.from),
-            ])
-            .output()
-            .await?;
-
-        let fps = String::from_utf8(output.stdout)
-            .map_err(|e| anyhow::anyhow!("failed to parse fps: {}", e))?;
-
-        let fps = fps.trim().split('/').collect::<Vec<&str>>();
-        let fps = if fps.len() == 1 {
-            fps[0].parse::<u32>()?
-        } else if fps.len() == 2 {
-            let numerator = fps[0].parse::<u32>()?;
-            let denominator = fps[1].parse::<u32>()?;
-            (numerator as f64 / denominator as f64).round() as u32
-        } else if fps.len() == 3 {
-            let numerator = fps[0].parse::<u32>()?;
-            let denominator = fps[2].parse::<u32>()?;
-            (numerator as f64 / denominator as f64).round() as u32
-        } else {
-            return Err(anyhow::anyhow!("failed to parse fps"));
-        };
+        let fps = get_fps(format!("input/{}.{}", self.id, self.from)).await?;
 
         self.fps = Some(fps);
         Ok(fps)
