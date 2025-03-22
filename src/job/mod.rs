@@ -33,5 +33,13 @@ pub enum JobType {
 pub trait JobTrait: Clone {
     fn id(&self) -> Uuid;
     fn auth(&self) -> &str;
-    fn handle_ws(&self, session: Session, stream: AggregatedMessageStream);
+
+    async fn handle_ws(
+        &mut self,
+        session: Session,
+        stream: AggregatedMessageStream,
+    ) -> anyhow::Result<()>;
+
+    fn completed(&self) -> bool;
+    fn output_path(&self) -> Option<String>;
 }

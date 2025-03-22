@@ -1,14 +1,48 @@
+mod converter;
 mod format;
 mod speed;
 
-pub use format::*;
+use std::collections::BTreeMap;
 
+use actix_ws::AggregatedMessage;
+use converter::{Converter, ProgressUpdate};
+use discord_webhook2::{message, webhook::DiscordWebhook};
+pub use format::*;
+use futures_util::StreamExt as _;
+use speed::ConversionSpeed;
+
+use crate::{
+    job::{Job, JobTrait},
+    send_message,
+    state::APP_STATE,
+    OUTPUT_LIFETIME,
+};
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
-use tokio::process::Command;
+use tokio::{fs, process::Command};
 use uuid::Uuid;
 
-use crate::job::JobTrait;
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum Message {
+    #[serde(rename = "startJob", rename_all = "camelCase")]
+    StartJob { to: String, speed: ConversionSpeed },
+
+    #[serde(rename = "jobFinished", rename_all = "camelCase")]
+    JobFinished,
+
+    #[serde(rename = "progressUpdate", rename_all = "camelCase")]
+    ProgressUpdate(ProgressUpdate),
+
+    #[serde(rename = "error", rename_all = "camelCase")]
+    Error { message: String },
+}
+
+impl Into<String> for Message {
+    fn into(self) -> String {
+        serde_json::to_string(&self).unwrap()
+    }
+}
 
 const DEFAULT_BITRATE: u64 = 4 * 1_000_000;
 const BITRATE_MULTIPLIER: f64 = 2.5;
@@ -36,8 +70,121 @@ impl JobTrait for ConversionJob {
         &self.auth
     }
 
-    fn handle_ws(&self, session: actix_ws::Session, stream: actix_ws::AggregatedMessageStream) {
-        todo!("implement handle_ws for ConversionJob");
+    async fn handle_ws(
+        &mut self,
+        mut session: actix_ws::Session,
+        mut stream: actix_ws::AggregatedMessageStream,
+    ) -> anyhow::Result<()> {
+        // wait till we receive a message where Message::StartJob
+        let mut message = None;
+        while let Some(Ok(msg)) = stream.next().await {
+            match msg {
+                AggregatedMessage::Ping(b) => {
+                    session.pong(&b).await?;
+                }
+
+                AggregatedMessage::Text(text) => {
+                    let msg: Message = serde_json::from_str(&text)?;
+                    if matches!(msg, Message::StartJob { .. }) {
+                        message = Some(msg);
+                        break;
+                    } else {
+                        log::error!("Invalid message: {:?}", msg);
+                    }
+                }
+
+                _ => {}
+            }
+        }
+
+        let Message::StartJob { to, speed } =
+            message.ok_or_else(|| anyhow::anyhow!("no message found"))?
+        else {
+            return Err(anyhow::anyhow!("no message found"));
+        };
+
+        let from = self.from.parse::<ConverterFormat>()?;
+        let to = to.parse::<ConverterFormat>()?;
+
+        self.to = Some(to.to_string());
+
+        let converter = Converter::new(from, to, speed);
+
+        let mut rx = converter.convert(self).await?;
+
+        let mut logs = Vec::new();
+
+        while let Some(update) = rx.recv().await {
+            match update {
+                ProgressUpdate::Error(err) => {
+                    logs.push(err);
+                }
+                _ => {
+                    send_message!(session, Message::ProgressUpdate(update)).await?;
+                }
+            }
+        }
+
+        let is_empty = fs::metadata(&format!("output/{}.{}", self.id, to.to_string()))
+            .await
+            .map(|m| m.len() == 0)
+            .unwrap_or(true);
+
+        if is_empty {
+            log::error!("job {} failed", self.id);
+
+            send_message!(
+                session,
+                Message::Error {
+                    message: "oops -- your job failed! maddie has been notified :)".to_string()
+                }
+            )
+            .await?;
+
+            let from = self.from.clone();
+            let to = to.to_string();
+
+            let id = self.id;
+
+            tokio::spawn(async move {
+                if let Err(e) = handle_job_failure(id, from, to, logs.join("\n")).await {
+                    log::error!("failed to handle job failure: {}", e);
+                }
+            });
+        } else {
+            send_message!(session, Message::JobFinished).await?;
+            self.completed = true;
+        }
+
+        let id = self.id;
+
+        tokio::spawn(async move {
+            tokio::time::sleep(OUTPUT_LIFETIME).await;
+            let mut app_state = APP_STATE.lock().await;
+            app_state.jobs.remove(&id);
+            drop(app_state);
+
+            let path = format!("output/{}.{}", id, to.to_string());
+            if let Err(e) = fs::remove_file(&path).await {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    log::error!("failed to remove output file: {}", e);
+                }
+            }
+        });
+
+        fs::remove_file(&format!("input/{}.{}", self.id, self.from)).await?;
+
+        Ok(())
+    }
+
+    fn completed(&self) -> bool {
+        self.completed
+    }
+
+    fn output_path(&self) -> Option<String> {
+        self.to
+            .as_ref()
+            .map(|to| format!("output/{}.{}", self.id, to))
     }
 }
 
@@ -191,4 +338,32 @@ impl ConversionJob {
         let (bitrate, fps) = (self.bitrate().await?, self.fps().await?);
         Ok((bitrate, fps))
     }
+}
+
+async fn handle_job_failure(
+    job_id: Uuid,
+    from: String,
+    to: String,
+    logs: String,
+) -> anyhow::Result<()> {
+    let client_url = std::env::var("WEBHOOK_URL")?;
+    let mentions = std::env::var("WEBHOOK_PINGS").unwrap_or_else(|_| "".to_string());
+
+    let mut files = BTreeMap::new();
+    files.insert(format!("{}.log", job_id), logs.as_bytes().to_vec());
+
+    let client = DiscordWebhook::new(&client_url)?;
+    let message = message::Message::new(|m| {
+        m.content(format!("🚨🚨🚨 {}", mentions)).embed(|e| {
+            e.title("vertd job failed!")
+                .field(|f| f.name("job id").value(job_id))
+                .field(|f| f.name("from").value(format!(".{}", from)).inline(true))
+                .field(|f| f.name("to").value(format!(".{}", to)).inline(true))
+                .color(0xff83fa)
+        })
+    });
+
+    client.send_with_files(&message, files).await?;
+
+    Ok(())
 }

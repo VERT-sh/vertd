@@ -1,7 +1,8 @@
 use actix_web::{get, web, HttpResponse, Responder, ResponseError};
+use tokio::fs;
 use uuid::Uuid;
 
-use crate::http::response::ApiResponse;
+use crate::{http::response::ApiResponse, job::JobTrait as _};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DownloadError {
@@ -28,7 +29,49 @@ impl ResponseError for DownloadError {
     }
 }
 
-#[get("/download/{id}/{token}")]
-pub async fn download(path: web::Path<(Uuid, String)>) -> Result<impl Responder, DownloadError> {
-    Ok(ApiResponse::Success(()))
+#[get("/download/{token}")]
+pub async fn download(path: web::Path<String>) -> Result<impl Responder, DownloadError> {
+    let token = path.into_inner();
+    let app_state = crate::state::APP_STATE.lock().await;
+    let job = app_state
+        .jobs
+        .iter()
+        .find_map(|(_, job)| {
+            if job.auth() == token {
+                Some(job.clone())
+            } else {
+                None
+            }
+        })
+        .ok_or(DownloadError::JobNotFound)?;
+    drop(app_state);
+
+    if !job.completed() {
+        return Err(DownloadError::IncompleteHandshake);
+    }
+
+    let output_path = job
+        .output_path()
+        .ok_or(DownloadError::IncompleteHandshake)?;
+
+    let bytes = fs::read(&output_path).await.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            DownloadError::JobNotFound
+        } else {
+            DownloadError::FilesystemError(e)
+        }
+    })?;
+
+    let mime = mime_guess::from_path(&output_path)
+        .first_or_octet_stream()
+        .to_string();
+
+    fs::remove_file(output_path)
+        .await
+        .map_err(|e| DownloadError::FilesystemError(e))?;
+
+    Ok(HttpResponse::Ok()
+        .insert_header(("Content-Type", mime))
+        .insert_header(("Content-Length", bytes.len()))
+        .body(bytes))
 }

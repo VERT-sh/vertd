@@ -11,6 +11,7 @@ use crate::{
     state::APP_STATE,
 };
 
+#[macro_export]
 macro_rules! send_message {
     ($session:expr, $msg:expr) => {{
         let msg: String = $msg.into();
@@ -45,11 +46,27 @@ pub async fn websocket(req: HttpRequest, body: web::Payload) -> actix_web::Resul
 }
 
 async fn handle_job(
-    job: Job,
-    session: actix_ws::Session,
+    mut job: Job,
+    mut session: actix_ws::Session,
     stream: actix_ws::AggregatedMessageStream,
 ) -> anyhow::Result<()> {
-    job.handle_ws(session, stream);
+    if job.completed() {
+        send_message!(
+            session,
+            AuthStateMessage::Error {
+                message: "job already completed".to_string(),
+            }
+        )
+        .await?;
+        return Ok(());
+    }
+    job.handle_ws(session, stream).await?;
+    // insert or replace the job in the app state
+    let mut app_state = APP_STATE.lock().await;
+    if app_state.jobs.contains_key(&job.id()) {
+        app_state.jobs.remove(&job.id());
+    }
+    app_state.jobs.insert(job.id(), job);
     Ok(())
 }
 

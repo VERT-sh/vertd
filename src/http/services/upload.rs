@@ -102,7 +102,19 @@ pub async fn upload(
         JobType::Compression => {
             let rand: [u8; 64] = rand::random();
             let token = hex::encode(rand);
-            let job = CompressionJob::new(token);
+            let filename = form.file.file_name.ok_or_else(|| UploadError::NoFilename)?;
+            let ext = filename
+                .split('.')
+                .last()
+                .and_then(|ext| {
+                    Some(
+                        ext.chars()
+                            .filter(|c| c.is_alphanumeric())
+                            .collect::<String>(),
+                    )
+                })
+                .ok_or_else(|| UploadError::NoExtension)?;
+            let job = CompressionJob::new(token, ext);
             (job.id, job.into())
         }
     };

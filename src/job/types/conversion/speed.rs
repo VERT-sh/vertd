@@ -5,7 +5,7 @@ use crate::job::gpu::JobGPU;
 
 use super::format::ConverterFormat;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum ConversionSpeed {
     UltraFast,

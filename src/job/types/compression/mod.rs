@@ -11,6 +11,8 @@ pub struct CompressionJob {
     pub id: Uuid,
     pub auth: String,
     pub target_size_mb: Option<u32>,
+    pub completed: bool,
+    pub from: String,
 }
 
 impl JobTrait for CompressionJob {
@@ -22,17 +24,31 @@ impl JobTrait for CompressionJob {
         self.id
     }
 
-    fn handle_ws(&self, session: actix_ws::Session, stream: actix_ws::AggregatedMessageStream) {
+    async fn handle_ws(
+        &mut self,
+        session: actix_ws::Session,
+        stream: actix_ws::AggregatedMessageStream,
+    ) -> anyhow::Result<()> {
         todo!("implement handle_ws for CompressionJob")
+    }
+
+    fn completed(&self) -> bool {
+        self.completed
+    }
+
+    fn output_path(&self) -> Option<String> {
+        Some(format!("output/{}.{}", self.id, self.from))
     }
 }
 
 impl CompressionJob {
-    pub fn new(auth_token: String) -> Self {
+    pub fn new(auth_token: String, from: String) -> Self {
         Self {
             id: Uuid::new_v4(),
             auth: auth_token,
             target_size_mb: None,
+            completed: false,
+            from,
         }
     }
 }
