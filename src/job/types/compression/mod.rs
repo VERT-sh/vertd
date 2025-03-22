@@ -26,8 +26,8 @@ impl JobTrait for CompressionJob {
 
     async fn handle_ws(
         &mut self,
-        session: actix_ws::Session,
-        stream: actix_ws::AggregatedMessageStream,
+        _session: actix_ws::Session,
+        _stream: actix_ws::AggregatedMessageStream,
     ) -> anyhow::Result<()> {
         todo!("implement handle_ws for CompressionJob")
     }

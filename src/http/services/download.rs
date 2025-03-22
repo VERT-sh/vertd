@@ -1,6 +1,5 @@
 use actix_web::{get, web, HttpResponse, Responder, ResponseError};
 use tokio::fs;
-use uuid::Uuid;
 
 use crate::{http::response::ApiResponse, job::JobTrait as _};
 
@@ -10,8 +9,6 @@ pub enum DownloadError {
     JobNotFound,
     #[error("incomplete websocket handshake")]
     IncompleteHandshake,
-    #[error("invalid token")]
-    InvalidToken,
     #[error("filesystem error: {0}")]
     FilesystemError(#[from] std::io::Error),
 }
@@ -21,7 +18,6 @@ impl ResponseError for DownloadError {
         let status = match self {
             DownloadError::JobNotFound => actix_web::http::StatusCode::NOT_FOUND,
             DownloadError::IncompleteHandshake => actix_web::http::StatusCode::BAD_REQUEST,
-            DownloadError::InvalidToken => actix_web::http::StatusCode::UNAUTHORIZED,
             DownloadError::FilesystemError(_) => actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
         };
 

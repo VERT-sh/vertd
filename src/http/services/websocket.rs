@@ -1,10 +1,7 @@
-use std::sync::Arc;
-
 use actix_web::{get, rt, web, HttpRequest, Responder};
-use actix_ws::{AggregatedMessage, Message};
+use actix_ws::AggregatedMessage;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Notify;
 
 use crate::{
     job::{Job, JobTrait},

@@ -12,7 +12,7 @@ use futures_util::StreamExt as _;
 use speed::ConversionSpeed;
 
 use crate::{
-    job::{Job, JobTrait},
+    job::JobTrait,
     send_message,
     state::APP_STATE,
     OUTPUT_LIFETIME,

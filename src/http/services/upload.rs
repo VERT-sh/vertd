@@ -83,7 +83,7 @@ pub async fn upload(
 
             let rand: [u8; 64] = rand::random();
             let token = hex::encode(rand);
-            let job = ConversionJob::new(token, ext.to_string());
+            let mut job = ConversionJob::new(token, ext.to_string());
             let buf = tokio::task::spawn_blocking(async move || {
                 let mut buf = Vec::with_capacity(form.file.size);
                 let mut reader = form.file.file;
@@ -96,6 +96,7 @@ pub async fn upload(
             .map_err(|_| UploadError::GetChunk)?
             .await;
             fs::write(format!("input/{}.{}", job.id, ext), &buf).await?;
+            job.total_frames().await?;
             (job.id, job.into())
         }
 
