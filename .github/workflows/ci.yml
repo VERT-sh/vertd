@@ -29,17 +29,10 @@ jobs:
           - os: vert-linux
             friendly-name: linux-x86_64
             target: x86_64-unknown-linux-gnu
-          - os: vert-linux
-            friendly-name: linux-x86
-            target: i686-unknown-linux-gnu
           # Windows
           - os: vert-windows
             friendly-name: windows-x86_64
             target: x86_64-pc-windows-gnu
-            format: ".exe"
-          - os: vert-windows
-            friendly-name: windows-x86
-            target: i686-pc-windows-gnu
             format: ".exe"
     steps:
       - name: Checkout
