@@ -96,8 +96,7 @@ pub async fn upload(
             let ext = ext
                 .parse::<ConverterFormat>()
                 .map_err(|_| UploadError::InvalidExtension(ext.to_string()))?;
-            let mut job = ConversionJob::new(token, ext.to_string());
-            job.total_frames().await?;
+            let job = ConversionJob::new(token, ext.to_string());
             (job.id, job.into())
         }
 
