@@ -3,6 +3,7 @@ use log::warn;
 use std::fmt::{self, Display, Formatter};
 use tokio::process::Command;
 use wgpu::Instance;
+use std::env::consts;
 
 pub enum ConverterGPU {
     AMD,
@@ -32,10 +33,47 @@ impl ConverterGPU {
 
     pub fn encoder_priority(&self) -> Vec<&str> {
         match self {
-            ConverterGPU::AMD => vec!["amf"],
-            ConverterGPU::Intel => vec!["qsv"],
+            ConverterGPU::AMD => {
+                if consts::OS == "linux" {
+                    vec!["vaapi"]
+                } else {
+                    vec!["amf"]
+                }
+            },
+
+            ConverterGPU::Intel => {
+                if consts::OS == "linux" {
+                    vec!["vaapi"]
+                } else {
+                    vec!["qsv"]
+                }
+            },
+
             ConverterGPU::NVIDIA => vec!["nvenc"],
             ConverterGPU::Apple => vec!["videotoolbox"],
+        }
+    }
+
+    pub fn hwaccel_args(&self) -> &[&str] {
+        match self {
+            ConverterGPU::AMD => {
+                if consts::OS == "linux" {
+                    &["-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi"]
+                } else {
+                    &["-hwaccel", "amf"]
+                }
+            },
+
+            ConverterGPU::Intel => {
+                if consts::OS == "linux" {
+                    &["-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi"]
+                } else {
+                    &["-hwaccel", "qsv"]
+                }
+            },
+
+            ConverterGPU::NVIDIA => &["-hwaccel", "cuda"],
+            ConverterGPU::Apple => &["-hwaccel", "videotoolbox"],
         }
     }
 }
@@ -72,13 +110,34 @@ pub async fn get_gpu() -> anyhow::Result<ConverterGPU> {
     if info.name.contains("Apple") {
         return Ok(ConverterGPU::Apple);
     }
+
     match info.vendor {
         0x10DE => Ok(ConverterGPU::NVIDIA),
         0x1002 => Ok(ConverterGPU::AMD),
         0x8086 => Ok(ConverterGPU::Intel), // fun fact: intel's vendor id is 0x8086, presumably in reference to the intel 8086 processor
         0x106B | 0x0 => Ok(ConverterGPU::Apple),
-        0x10005 if is_docker().await => {
-            warn!("are you in a docker container? assuming NVIDIA, please open a PR and fix this if you're not.");
+        0x10000..=0x10007 if is_docker().await => {
+            // https://registry.khronos.org/vulkan/specs/latest/man/html/VkVendorId.html
+            // https://forums.developer.nvidia.com/t/wsl2-ubuntu-uses-llvmpipe-instead-of-nvidia-gpu-3090/319022
+            warn!("*******");
+            warn!("you're running vertd on a docker container, but no GPU was detected.");
+            warn!("this usually is because you're running Docker under WSL or because");
+            warn!("you are not passing the GPU device correctly.");
+            warn!("");
+            warn!("if this doesn't seem right, create an issue and provide this info:");
+            warn!("- adapter name: {}", info.name);
+            warn!("- adapter vendor: 0x{:X}", info.vendor);
+            warn!("- backend: {}", info.backend.to_str());
+            warn!("- device ID: {}", info.device);
+            warn!("- device type: {:#?}", info.device_type);
+            warn!("- driver: {}", info.driver);
+            warn!("- driver info: {}", info.driver_info);
+            warn!("- os: {}", consts::OS);
+            warn!("");
+            warn!("vertd will assume you have a NVIDIA GPU. if this isn't the case,");
+            warn!("conversions will likely fail.");
+            warn!("*******");
+
             Ok(ConverterGPU::NVIDIA)
         }
         _ => Err(anyhow!("unknown GPU vendor: 0x{:X}", info.vendor)),
