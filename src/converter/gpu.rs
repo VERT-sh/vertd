@@ -124,7 +124,8 @@ pub async fn get_gpu() -> anyhow::Result<ConverterGPU> {
             warn!("this usually is because you're running Docker under WSL or because");
             warn!("you are not passing the GPU device correctly.");
             warn!("");
-            warn!("if this doesn't seem right, create an issue and provide this info:");
+            warn!("if this doesn't seem right, make sure to provide the following info when");
+            warn!("asking for help:");
             warn!("- adapter name: {}", info.name);
             warn!("- adapter vendor: 0x{:X}", info.vendor);
             warn!("- backend: {}", info.backend.to_str());
@@ -132,7 +133,6 @@ pub async fn get_gpu() -> anyhow::Result<ConverterGPU> {
             warn!("- device type: {:#?}", info.device_type);
             warn!("- driver: {}", info.driver);
             warn!("- driver info: {}", info.driver_info);
-            warn!("- os: {}", consts::OS);
             warn!("");
             warn!("vertd will assume you have a NVIDIA GPU. if this isn't the case,");
             warn!("conversions will likely fail.");
