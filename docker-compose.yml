@@ -1,12 +1,21 @@
 services:
   vertd:
     build: .
+    image: vert-sh/vertd:latest
     environment:
       - PORT=${PORT:-24153}
       - WEBHOOK_URL=${WEBHOOK_URL}
       - WEBHOOK_PINGS=${WEBHOOK_PINGS}
     ports:
       - "${PORT:-24153}:${PORT:-24153}"
+
+    # For AMD/Intel GPUs, uncomment the "devices" section - then remove
+    # or comment out the "deploy" section used for NVIDIA GPUs.
+    #
+    # devices:
+    #   - /dev/dri
+
+    # For NVIDIA cards, simply keep the following section:
     deploy:
       resources:
         reservations:

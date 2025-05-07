@@ -1,22 +1,30 @@
-FROM nvidia/cuda:12.8.0-runtime-ubuntu24.04
+FROM rust:1.86 AS builder
 
-RUN apt-get update --allow-insecure-repositories && apt-get install -y \
-    curl \
-    build-essential \
-    libclang-dev \
-    vulkan-tools \
-    ffmpeg \
-    libssl-dev \
-    pkg-config \
-    && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
 
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-
-WORKDIR /app
 COPY . .
 
-# build
-# RUN cargo build --release
-RUN $HOME/.cargo/bin/cargo build --release
+RUN cargo build --release
 
-CMD ["./target/release/vertd"]
+FROM nvidia/cuda:12.8.0-base-ubuntu24.04
+
+WORKDIR /app
+
+ARG DEBIAN_FRONTEND="noninteractive"
+
+ENV XDG_RUNTIME_DIR=/tmp
+
+COPY --from=builder /build/target/release/vertd ./vertd
+
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    mesa-va-drivers \
+    intel-media-va-driver \
+    vulkan-tools
+
+RUN rm -rf \
+    /tmp/* \
+    /var/lib/apt/lists/* \
+    /var/tmp/*
+
+ENTRYPOINT ["./vertd"]

@@ -45,13 +45,7 @@ impl Converter {
             .await?;
         let args = args.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
         let args = args.as_slice();
-
-        let gpu_args: &[&str] = match gpu {
-            gpu::ConverterGPU::AMD => &["-hwaccel", "amf"],
-            gpu::ConverterGPU::Intel => &["-hwaccel", "qsv"],
-            gpu::ConverterGPU::NVIDIA => &["-hwaccel", "cuda"],
-            gpu::ConverterGPU::Apple => &["-hwaccel", "videotoolbox"],
-        };
+        let gpu_args: &[&str] = gpu.hwaccel_args();
 
         let command = &[
             &["-hide_banner", "-loglevel", "error", "-progress", "pipe:1"],
