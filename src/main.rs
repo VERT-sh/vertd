@@ -73,6 +73,7 @@ async fn main() -> anyhow::Result<()> {
             match gpu {
                 converter::gpu::ConverterGPU::AMD => "n",
                 converter::gpu::ConverterGPU::Apple => "n",
+                converter::gpu::ConverterGPU::Intel => "n",
                 _ => "",
             },
             gpu
