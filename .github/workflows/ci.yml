@@ -11,6 +11,9 @@ on:
     branches:
       - main
 
+env:
+  REGISTRY: ghcr.io
+
 jobs:
   build:
     name: Build on ${{ matrix.os }} (${{ matrix.target }})
@@ -51,6 +54,57 @@ jobs:
         with:
           path: target/${{ matrix.target }}/release/vertd${{ matrix.format }}
           name: vertd-${{ matrix.friendly-name }}${{ matrix.format }}
+
+  build-docker:
+    name: Build and publish docker image
+    needs: build
+    runs-on: vert-linux
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download vertd linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: vertd-linux-x86_64
+          path: .
+
+      - name: Prepare for docker build
+        run: |
+          mv vertd-linux-x86_64 vertd
+          chmod +x vertd
+
+      - name: Convert repository name to lowercase
+        id: repo
+        run: echo "repository=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.repository }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=nightly-${{ github.sha }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
 
   release:
     name: Publish release
