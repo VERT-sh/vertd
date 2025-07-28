@@ -1,4 +1,5 @@
 use super::{gpu::ConverterGPU, speed::ConversionSpeed};
+use log::warn;
 use strum_macros::{Display, EnumString};
 
 #[derive(Clone, Copy, Debug, PartialEq, EnumString, Display)]
@@ -14,6 +15,22 @@ pub enum ConverterFormat {
     MTS,
     TS,
     M2TS,
+    MPEG,
+    MPG,
+    FLV,
+    F4V,
+    VOB,
+    M4V,
+    #[strum(serialize = "3gp")]
+    ThreeGP,
+    #[strum(serialize = "3g2")]
+    ThreeG2,
+    MXF,
+    OGV,
+    RM,
+    RMVB,
+    H264,
+    DIVX,
 }
 
 impl ConverterFormat {
@@ -64,7 +81,13 @@ impl Conversion {
             | ConverterFormat::MOV
             | ConverterFormat::MTS
             | ConverterFormat::TS
-            | ConverterFormat::M2TS => {
+            | ConverterFormat::M2TS
+            | ConverterFormat::FLV
+            | ConverterFormat::F4V
+            | ConverterFormat::M4V
+            | ConverterFormat::ThreeGP
+            | ConverterFormat::ThreeG2
+            | ConverterFormat::H264 => {
                 let encoder = self
                     .accelerated_or_default_codec(gpu, &["h264"], "libx264")
                     .await;
@@ -99,6 +122,7 @@ impl Conversion {
                     "wmav2".to_string(),
                 ]
             }
+
             ConverterFormat::WebM => {
                 let encoder = self
                     .accelerated_or_default_codec(gpu, &["av1", "vp9", "vp8"], "libvpx")
@@ -110,7 +134,46 @@ impl Conversion {
                     "libvorbis".to_string(),
                 ]
             }
+
             ConverterFormat::AVI => vec![
+                "-c:v".to_string(),
+                "mpeg4".to_string(),
+                "-c:a".to_string(),
+                "libmp3lame".to_string(),
+            ],
+
+            ConverterFormat::MPEG | ConverterFormat::MPG | ConverterFormat::VOB => vec![
+                "-c:v".to_string(),
+                "mpeg2video".to_string(),
+                "-c:a".to_string(),
+                "mp2".to_string(),
+            ],
+
+            // there is more formats that mxf supports (e.g. on cameras)
+            ConverterFormat::MXF => {
+                vec![
+                    "-c:v".to_string(),
+                    "mpeg2video".to_string(),
+                    "-c:a".to_string(),
+                    "pcm_s16le".to_string(),
+                ]
+            }
+
+            ConverterFormat::OGV => vec![
+                "-c:v".to_string(),
+                "libtheora".to_string(),
+                "-c:a".to_string(),
+                "libvorbis".to_string(),
+            ],
+
+            ConverterFormat::RM | ConverterFormat::RMVB => {
+                warn!("Encoding to RM/RMVB is not supported");
+                return Err(anyhow::anyhow!("Encoding to RM/RMVB is not supported"));
+            }
+
+            ConverterFormat::DIVX => vec![
+                "-f".to_string(),
+                "avi".to_string(),
                 "-c:v".to_string(),
                 "mpeg4".to_string(),
                 "-c:a".to_string(),

@@ -35,7 +35,14 @@ impl ConversionSpeed {
             | ConverterFormat::MOV
             | ConverterFormat::MTS
             | ConverterFormat::TS
-            | ConverterFormat::M2TS => {
+            | ConverterFormat::M2TS
+            | ConverterFormat::FLV
+            | ConverterFormat::F4V
+            | ConverterFormat::M4V
+            | ConverterFormat::ThreeGP
+            | ConverterFormat::ThreeG2
+            | ConverterFormat::H264
+            | ConverterFormat::DIVX => {
                 args.push("-preset".to_string());
                 match gpu {
                     ConverterGPU::NVIDIA => match self {
@@ -76,8 +83,27 @@ impl ConversionSpeed {
                 };
             }
 
-            ConverterFormat::WMV => {
-                warn!("wmv format does not support speed settings");
+            ConverterFormat::OGV => {
+                args.push("-speed".to_string());
+                match self {
+                    ConversionSpeed::UltraFast | ConversionSpeed::Fast => {
+                        args.push("2".to_string())
+                    }
+                    ConversionSpeed::Medium | ConversionSpeed::Slow => args.push("1".to_string()),
+                    ConversionSpeed::Slower | ConversionSpeed::VerySlow => {
+                        args.push("0".to_string())
+                    }
+                }
+            }
+
+            ConverterFormat::MPEG
+            | ConverterFormat::MPG
+            | ConverterFormat::WMV
+            | ConverterFormat::VOB
+            | ConverterFormat::MXF
+            | ConverterFormat::RM
+            | ConverterFormat::RMVB => {
+                warn!("{:?} format does not support speed settings", to);
             }
         };
 
