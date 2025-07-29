@@ -1,4 +1,4 @@
-# Docker
+# Docker Setup
 
 This file covers how to set up `vertd` using Docker.
 
