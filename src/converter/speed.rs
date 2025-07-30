@@ -102,7 +102,8 @@ impl ConversionSpeed {
             | ConverterFormat::VOB
             | ConverterFormat::MXF
             | ConverterFormat::RM
-            | ConverterFormat::RMVB => {
+            | ConverterFormat::RMVB
+            | ConverterFormat::SWF => {
                 warn!("{:?} format does not support speed settings", to);
             }
         };

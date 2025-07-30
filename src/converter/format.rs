@@ -31,6 +31,7 @@ pub enum ConverterFormat {
     RMVB,
     H264,
     DIVX,
+    SWF,
 }
 
 impl ConverterFormat {
@@ -178,6 +179,17 @@ impl Conversion {
                 "mpeg4".to_string(),
                 "-c:a".to_string(),
                 "libmp3lame".to_string(),
+            ],
+
+            ConverterFormat::SWF => vec![
+                "-f".to_string(),
+                "swf".to_string(),
+                "-c:v".to_string(),
+                "flv".to_string(),
+                "-c:a".to_string(),
+                "libmp3lame".to_string(),
+                "-b:a".to_string(),
+                "192k".to_string(),
             ],
         };
 
