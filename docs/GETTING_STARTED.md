@@ -4,12 +4,11 @@ This file covers how to get started with `vertd`.
 
 - [As a user](#as-a-user)
   - [Running it on macOS/Linux](#running-it-on-macoslinux)
-  - [Using systemd](#using-systemd)
+  - [Running it under systemd](#using-systemd)
 - [As a developer](#as-a-developer)
   - [Prerequisites](#prerequisites)
   - [Cloning](#cloning)
   - [Compiling](#compiling)
-  - [Running](#running)
 
 ## As a user
 
@@ -29,11 +28,14 @@ $ cd ~/Downloads/
 Then, modify the permissions of the executable and run it by using:
 
 ```shell
-$ chmod +x vertd-os-arch
-$ ./vertd-os-arch
+$ chmod +x <vertd filename>
+$ ./<vertd filename>
 ```
 
-You should modify `vertd-os-arch` to be the name of the executable you downloaded earlier.
+Replace `<vertd filename>` with the name of the file you just downloaded (e.g. `vertd-mac-arm64`)
+
+> [!TIP]
+> For Arch Linux users, there's a **community-made** [`vertd-git`](https://aur.archlinux.org/packages/vertd-git) AUR package you can use.
 
 ### Using systemd
 
@@ -116,18 +118,9 @@ $ cd vertd/
 
 ### Compiling
 
-You can compile `vertd` using:
+You can compile `vertd` using cargo (Rust's package manager and build tool):
 
 ```shell
 $ cargo build           # for a debug build
 $ cargo build --release # for a release build
-```
-
-### Running
-
-You can run `vertd` with cargo by using:
-
-```shell
-$ cargo run           # for a debug build
-$ cargo run --release # for a release build
 ```
