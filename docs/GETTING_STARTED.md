@@ -45,7 +45,7 @@ Assuming your `vertd` executable is called `vertd-linux-x86_64` and is on the `~
 $ sudo mv ~/Downloads/vertd-linux-x86_64 /usr/bin/vertd
 ```
 
-Create a service file (thanks @mqus and @claymorwan!):
+Create a service file (thanks [@mqus](https://github.com/mqus) and [@claymorwan](https://github.com/claymorwan)!):
 
 ```shell
 $ sudo tee /etc/systemd/system/vertd.service<<EOF
