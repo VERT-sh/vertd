@@ -7,7 +7,7 @@ This file covers how to set up `vertd` using Docker.
 - [Manually](#manually)
   - [Intel and AMD GPUs](#intel-and-amd-gpus)
   - [NVIDIA GPUs](#nvidia-gpus)
-- [With Compose (recommended)](#with-compose)
+- [With Compose (recommended)](#with-compose-recommended)
   - [Intel and AMD GPUs](#intel-and-amd-gpus-1)
   - [NVIDIA GPUs](#nvidia-gpus-1)
 

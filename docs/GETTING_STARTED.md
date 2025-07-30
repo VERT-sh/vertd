@@ -4,7 +4,7 @@ This file covers how to get started with `vertd`.
 
 - [As a user](#as-a-user)
   - [Running it on macOS/Linux](#running-it-on-macoslinux)
-  - [Running it under systemd](#using-systemd)
+  - [Using systemd](#using-systemd)
 - [As a developer](#as-a-developer)
   - [Prerequisites](#prerequisites)
   - [Cloning](#cloning)
