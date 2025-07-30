@@ -27,8 +27,6 @@ $ sudo systemctl restart docker
 > [!NOTE]  
 > The commands above assume you're **not** running Docker in rootless mode. If you are, check the NVIDIA documentation for more details.
 
----
-
 ## Building an image
 
 Clone the repository:
@@ -43,8 +41,6 @@ Then, run the following command to build a Docker image for `vertd` with the `gh
 ```shell
 $ docker build -t ghcr.io/vert-sh/vertd:latest .
 ```
-
----
 
 ## Manually
 
@@ -84,8 +80,6 @@ $ docker run -d \
     -p 24153:24153 \
     ghcr.io/vert-sh/vertd:latest
 ```
-
----
 
 ## With Compose (recommended)
 

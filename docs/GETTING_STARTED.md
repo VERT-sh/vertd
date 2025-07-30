@@ -2,22 +2,19 @@
 
 This file covers how to get started with `vertd`.
 
-- [As a user](#as-a-user)
-  - [Running it on macOS/Linux](#running-it-on-macoslinux)
+- [Downloading the server binaries](#downloading-the-server-binaries)
+- [Running `vertd` on macOS/Linux](#running-vertd-on-macoslinux)
   - [Using systemd](#using-systemd)
-- [As a developer](#as-a-developer)
-  - [Prerequisites](#prerequisites)
-  - [Cloning](#cloning)
-  - [Compiling](#compiling)
+  - [Using Docker](#using-docker)
 
-## As a user
+## Downloading the server binaries
 
-Grab the latest `vertd` release for your operating system from [this page](https://github.com/VERT-sh/vertd/releases), then run it.
+Grab the latest `vertd` release for your operating system and architecture from [this page](https://github.com/VERT-sh/vertd/releases).
 
 > [!NOTE]
-> If you're using an Intel-based Mac, download the `vertd-mac-x86_64` executable. For Mac computers with Apple silicon, download `vertd-mac-arm64` instead.
+> If you're using an Intel-based Mac, download the `vertd-mac-x86_64` executable. For Mac computers with Apple silicon (M1 or newer), download `vertd-mac-arm64` instead.
 
-### Running it on macOS/Linux
+## Running `vertd` on macOS/Linux
 
 Assuming you downloaded the `vertd` executable to your Downloads folder, open the Terminal and run the following command to navigate there:
 
@@ -96,31 +93,6 @@ $ sudo systemctl status vertd
 
 You can also try opening http://localhost:24153 in your favorite web browser.
 
----
+### Using Docker
 
-## As a developer
-
-This section covers how to get started with `vertd` as a developer.
-
-### Prerequisites
-
-- Git
-- cargo
-
-### Cloning
-
-Run:
-
-```shell
-$ git clone https://github.com/VERT-sh/vertd
-$ cd vertd/
-```
-
-### Compiling
-
-You can compile `vertd` using cargo (Rust's package manager and build tool):
-
-```shell
-$ cargo build           # for a debug build
-$ cargo build --release # for a release build
-```
+Check out the [Docker Setup](./DOCKER_SETUP.md) page.
