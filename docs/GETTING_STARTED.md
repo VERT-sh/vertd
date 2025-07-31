@@ -2,10 +2,71 @@
 
 This file covers how to get started with `vertd`.
 
+- [Installing dependencies](#installing-dependencies)
+  - [Windows](#windows)
+  - [macOS](#macos)
+  - [Linux](#linux)
+    - [Debian](#debian)
+    - [Arch Linux](#arch-linux)
+    - [Fedora](#fedora)
 - [Downloading the server binaries](#downloading-the-server-binaries)
 - [Running `vertd` on macOS/Linux](#running-vertd-on-macoslinux)
   - [Using systemd](#using-systemd)
   - [Using Docker](#using-docker)
+
+## Installing dependencies
+
+For `vertd` to work, you'll need to have [FFmpeg](https://ffmpeg.org/) in the directory it is in or in your system PATH.
+
+The instructions below will use a package manager to install it, but you can also download FFmpeg binaries from [their website](https://ffmpeg.org/download.html#build-windows)
+instead. You can either put them in your system PATH or in the directory `vertd` is in.
+
+> [!NOTE]  
+> Other utilities in the FFmpeg suite like `ffprobe` should also be installed for `vertd` to work properly.
+
+### Windows
+
+Assuming you have [Chocolatey](https://chocolatey.org/install) installed on your system, open a Command Prompt or PowerShell window as an administrator and run:
+
+```shell
+$ choco install ffmpeg
+```
+
+### macOS
+
+Assuming you have [Homebrew](https://brew.sh/) installed, run:
+
+```shell
+$ brew install ffmpeg
+```
+
+### Linux
+
+The installation steps depend on your distribution. We will only cover the most commonly used ones.
+
+#### Debian
+
+This should also work for other Debian-based distributions such as Ubuntu, Pop_OS! and Linux Mint.
+
+```shell
+$ sudo apt update && sudo apt install -y ffmpeg
+```
+
+#### Arch Linux
+
+This should also work for other Arch-based distributions such as Manjaro and EndeavourOS.
+
+```shell
+$ sudo pacman -Sy ffmpeg
+```
+
+#### Fedora
+
+Use the following command to install FFmpeg on Fedora:
+
+```shell
+$ sudo dnf install -y ffmpeg
+```
 
 ## Downloading the server binaries
 
