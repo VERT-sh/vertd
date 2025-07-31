@@ -166,7 +166,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     if is_empty {
                         log::error!("job {} failed", job_id);
                         let message: String = Message::Error {
-                            message: "oops -- your job failed! maddie has been notified :)"
+                            message: "oops -- your job failed! make sure your file is valid before trying again - maddie has been notified :)"
                                 .to_string(),
                         }
                         .into();
