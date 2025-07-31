@@ -1,7 +1,7 @@
 services:
   vertd:
     build: .
-    image: vert-sh/vertd:latest
+    image: ghcr.io/vert-sh/vertd:latest
     environment:
       - PORT=${PORT:-24153}
       - WEBHOOK_URL=${WEBHOOK_URL}
