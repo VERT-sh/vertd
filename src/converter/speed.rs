@@ -58,6 +58,30 @@ impl ConversionSpeed {
                         }
                     },
 
+                    ConverterGPU::AMD => {
+                        #[cfg(target_os = "windows")]
+                        match self {
+                            ConversionSpeed::UltraFast | ConversionSpeed::Fast => {
+                                args.push("speed".to_string())
+                            }
+                            ConversionSpeed::Medium | ConversionSpeed::Slow => {
+                                args.push("balanced".to_string())
+                            }
+                            ConversionSpeed::Slower | ConversionSpeed::VerySlow => {
+                                args.push("quality".to_string())
+                            }
+                        }
+                        #[cfg(not(target_os = "windows"))]
+                        match self {
+                            ConversionSpeed::UltraFast => args.push("ultrafast".to_string()),
+                            ConversionSpeed::Fast => args.push("fast".to_string()),
+                            ConversionSpeed::Medium => args.push("medium".to_string()),
+                            ConversionSpeed::Slow => args.push("slow".to_string()),
+                            ConversionSpeed::Slower => args.push("slower".to_string()),
+                            ConversionSpeed::VerySlow => args.push("veryslow".to_string()),
+                        }
+                    }
+
                     _ => match self {
                         ConversionSpeed::UltraFast => args.push("ultrafast".to_string()),
                         ConversionSpeed::Fast => args.push("fast".to_string()),
