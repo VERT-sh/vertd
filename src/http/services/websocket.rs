@@ -15,6 +15,10 @@ use crate::{
     OUTPUT_LIFETIME,
 };
 
+fn default_keep_metadata() -> bool {
+    true
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "camelCase")]
 pub enum Message {
@@ -24,6 +28,8 @@ pub enum Message {
         job_id: Uuid,
         to: String,
         speed: ConversionSpeed,
+        #[serde(default = "default_keep_metadata")]
+        keep_metadata: bool,
     },
 
     #[serde(rename = "jobFinished", rename_all = "camelCase")]
@@ -70,6 +76,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     job_id,
                     to,
                     speed,
+                    keep_metadata,
                 } => {
                     let Some(mut job) = ({
                         let mut app_state = APP_STATE.lock().await;
@@ -123,7 +130,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         continue;
                     };
 
-                    let converter = Converter::new(from, to, speed);
+                    let converter = Converter::new(from, to, speed, keep_metadata);
 
                     let mut rx = match converter.convert(&mut job).await {
                         Ok(rx) => rx,

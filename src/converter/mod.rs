@@ -20,13 +20,20 @@ pub mod speed;
 pub struct Converter {
     pub conversion: Conversion,
     speed: ConversionSpeed,
+    keep_metadata: bool,
 }
 
 impl Converter {
-    pub fn new(from: ConverterFormat, to: ConverterFormat, speed: ConversionSpeed) -> Self {
+    pub fn new(
+        from: ConverterFormat,
+        to: ConverterFormat,
+        speed: ConversionSpeed,
+        keep_metadata: bool,
+    ) -> Self {
         Self {
             conversion: Conversion::new(from, to),
             speed,
+            keep_metadata,
         }
     }
 
@@ -47,11 +54,18 @@ impl Converter {
         let args = args.as_slice();
         let gpu_args: &[&str] = gpu.hwaccel_args();
 
+        let metadata_args: &[&str] = if self.keep_metadata {
+            &["-map_metadata", "0", "-map_chapters", "0"]
+        } else {
+            &["-map_metadata", "-1", "-map_chapters", "-1"]
+        };
+
         let command = &[
             &["-hide_banner", "-loglevel", "error", "-progress", "pipe:1"],
             gpu_args,
             &["-i", &input_filename],
             args,
+            metadata_args,
             &[&output_filename],
         ]
         .concat();
