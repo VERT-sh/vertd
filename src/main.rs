@@ -2,13 +2,13 @@ mod converter;
 mod http;
 mod state;
 
-use std::{process::exit, time::Duration};
+use std::{env, process::exit, time::Duration};
 
-use converter::gpu::get_gpu;
+use converter::gpu::{get_gpu, ConverterGPU};
 use dotenv::dotenv;
 use env_logger::Env;
 use http::start_http;
-use log::{error, info};
+use log::{error, info, warn};
 use tokio::fs;
 
 pub const INPUT_LIFETIME: Duration = Duration::from_secs(60 * 60);
@@ -39,6 +39,51 @@ async fn ffutil_version(util: FFUtil) -> anyhow::Result<String> {
     Ok(version.to_string())
 }
 
+fn parse_gpu(gpu_str: &str) -> anyhow::Result<ConverterGPU> {
+    match gpu_str.to_lowercase().as_str() {
+        "amd" => Ok(ConverterGPU::AMD),
+        "intel" => Ok(ConverterGPU::Intel),
+        "nvidia" => Ok(ConverterGPU::NVIDIA),
+        "apple" => Ok(ConverterGPU::Apple),
+        _ => Err(anyhow::anyhow!("{}. Valid options: amd, intel, nvidia, apple", gpu_str)),
+    }
+}
+
+fn get_forced_gpu() -> Option<ConverterGPU> {
+    // cli argument (-gpu <value>)
+    let args: Vec<String> = env::args().collect();
+    if let Some(gpu_arg_pos) = args.iter().position(|arg| arg == "-gpu" || arg == "--gpu") {
+        if let Some(gpu_value) = args.get(gpu_arg_pos + 1) {
+            match parse_gpu(gpu_value) {
+                Ok(gpu) => {
+                    info!("Using GPU from command line argument: {}", gpu);
+                    return Some(gpu);
+                }
+                Err(e) => {
+                    warn!("Invalid GPU specified in command line argument: {}", e);
+                }
+            }
+        } else {
+            warn!("GPU argument specified but no value provided");
+        }
+    }
+
+    // environment variable
+    if let Ok(gpu_env) = env::var("VERTD_FORCE_GPU") {
+        match parse_gpu(&gpu_env) {
+            Ok(gpu) => {
+                info!("Using GPU from environment variable VERTD_FORCE_GPU: {}", gpu);
+                return Some(gpu);
+            }
+            Err(e) => {
+                warn!("Invalid GPU specified in VERTD_FORCE_GPU environment variable: {}", e);
+            }
+        }
+    }
+
+    None
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenv().ok();
@@ -65,7 +110,11 @@ async fn main() -> anyhow::Result<()> {
         ffmpeg_version, ffprobe_version
     );
 
-    let gpu = get_gpu().await;
+    // check if env var or cli arg is specified for gpu, if not fallback to auto-detection
+    let gpu = match get_forced_gpu() {
+        Some(forced_gpu) => Ok(forced_gpu),
+        None => get_gpu().await,
+    };
 
     match gpu {
         Ok(gpu) => info!(
