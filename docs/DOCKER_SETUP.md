@@ -58,11 +58,11 @@ $ docker run -d \
 
 If you have an Intel or AMD GPU, you'll need to add the `--device=/dev/dri:/dev/dri` parameter to your `docker run` command. It should end up looking something like this:
 
-```shell
+```diff
 $ docker run -d \
     --name vertd \
     --restart=unless-stopped \
-    --device=/dev/dri:/dev/dri \
++   --device=/dev/dri:/dev/dri \
     -p 24153:24153 \
     ghcr.io/vert-sh/vertd:latest
 ```
@@ -71,12 +71,12 @@ $ docker run -d \
 
 If you have a NVIDIA GPU, you'll need to add the `--runtime=nvidia` and `--gpus all` parameters to your `docker run` command. It should end up looking something like this:
 
-```shell
+```diff
 $ docker run -d \
     --name vertd \
     --restart=unless-stopped \
-    --runtime=nvidia \
-    --gpus all \
++   --runtime=nvidia \
++   --gpus all \
     -p 24153:24153 \
     ghcr.io/vert-sh/vertd:latest
 ```
@@ -96,21 +96,21 @@ devices:
 
 Assuming you're using the [`docker-compose.yml`](../docker-compose.yml) file from this repository, you should also remove the following NVIDIA specific settings from it:
 
-```yaml
-runtime: nvidia
-deploy:
-  resources:
-    reservations:
-      devices:
-        - driver: nvidia
-          count: all
-          capabilities: [gpu]
+```diff
+- runtime: nvidia
+- deploy:
+-   resources:
+-     reservations:
+-       devices:
+-         - driver: nvidia
+-           count: all
+-           capabilities: [gpu]
 ```
 
 Finally, run the following command to bring the stack up:
 
-```shell
-$ docker compose up
+```bash
+docker compose up
 ```
 
 If you see a `detected an Intel GPU` or `detected an AMD GPU` message, you should be ready to go.
@@ -119,21 +119,21 @@ If you see a `detected an Intel GPU` or `detected an AMD GPU` message, you shoul
 
 If you're using the [`docker-compose.yml`](../docker-compose.yml) file we provide in this repository, you shouldn't need to do any changes. Otherwise, add the following settings to the `vertd` service:
 
-```yaml
-runtime: nvidia
-deploy:
-  resources:
-  reservations:
-    devices:
-      - driver: nvidia
-        count: all
-        capabilities: [gpu]
+```diff
++ runtime: nvidia
++ deploy:
++   resources:
++     reservations:
++       devices:
++         - driver: nvidia
++           count: all
++           capabilities: [gpu]
 ```
 
 Finally, bring the stack up by using:
 
-```shell
-$ docker compose up
+```bash
+docker compose up
 ```
 
 If you see a `detected a NVIDIA GPU` message without any warnings, you should be ready to go.
