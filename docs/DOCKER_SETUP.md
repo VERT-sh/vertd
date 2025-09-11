@@ -135,5 +135,47 @@ Finally, bring the stack up by using:
 ```bash
 docker compose up
 ```
-
 If you see a `detected a NVIDIA GPU` message without any warnings, you should be ready to go.
+
+
+
+### Example of docker compose may look like
+For Nvidia
+`docker-compose.nvidia.yml`
+```yml
+version: "3.8"
+
+services:
+  vertd:
+    image: ghcr.io/vert-sh/vertd:latest
+    container_name: vertd
+    restart: unless-stopped
+    ports:
+      - "24153:24153"
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+```
+`docker compose -f docker-compose.nvidia.yml up -d`
+
+For AMD
+`docker-compose.amd.yml`
+```yml
+version: "3.8"
+
+services:
+  vertd:
+    image: ghcr.io/vert-sh/vertd:latest
+    container_name: vertd
+    restart: unless-stopped
+    ports:
+      - "24153:24153"
+    devices:
+      - /dev/dri
+```
+`docker compose -f docker-compose.amd.yml up -d`
