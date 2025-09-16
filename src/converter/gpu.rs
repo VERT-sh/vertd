@@ -3,7 +3,6 @@ use log::warn;
 use std::fmt::{self, Display, Formatter};
 use tokio::process::Command;
 use wgpu::Instance;
-use std::env::consts;
 
 pub enum ConverterGPU {
     AMD,
@@ -32,48 +31,38 @@ impl ConverterGPU {
     }
 
     pub fn encoder_priority(&self) -> Vec<&str> {
+        #[cfg(target_os = "linux")]
         match self {
-            ConverterGPU::AMD => {
-                if consts::OS == "linux" {
-                    vec!["vaapi"]
-                } else {
-                    vec!["amf"]
-                }
-            },
-
-            ConverterGPU::Intel => {
-                if consts::OS == "linux" {
-                    vec!["vaapi"]
-                } else {
-                    vec!["qsv"]
-                }
-            },
-
             ConverterGPU::NVIDIA => vec!["nvenc"],
             ConverterGPU::Apple => vec!["videotoolbox"],
+            ConverterGPU::AMD => vec!["vaapi"],
+            ConverterGPU::Intel => vec!["vaapi"],
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        match self {
+            ConverterGPU::NVIDIA => vec!["nvenc"],
+            ConverterGPU::Apple => vec!["videotoolbox"],
+            ConverterGPU::AMD => vec!["amf"],
+            ConverterGPU::Intel => vec!["qsv"],
         }
     }
 
     pub fn hwaccel_args(&self) -> &[&str] {
+        #[cfg(target_os = "linux")]
         match self {
-            ConverterGPU::AMD => {
-                if consts::OS == "linux" {
-                    &["-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi"]
-                } else {
-                    &["-hwaccel", "amf"]
-                }
-            },
-
-            ConverterGPU::Intel => {
-                if consts::OS == "linux" {
-                    &["-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi"]
-                } else {
-                    &["-hwaccel", "qsv"]
-                }
-            },
-
             ConverterGPU::NVIDIA => &["-hwaccel", "cuda"],
             ConverterGPU::Apple => &["-hwaccel", "videotoolbox"],
+            ConverterGPU::AMD => &["-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi"],
+            ConverterGPU::Intel => &["-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi"],
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        match self {
+            ConverterGPU::NVIDIA => &["-hwaccel", "cuda"],
+            ConverterGPU::Apple => &["-hwaccel", "videotoolbox"],
+            ConverterGPU::AMD => &["-hwaccel", "amf"],
+            ConverterGPU::Intel => &["-hwaccel", "qsv"],
         }
     }
 }
