@@ -8,12 +8,14 @@ use crate::converter::job::Job;
 
 pub struct AppState {
     pub jobs: HashMap<Uuid, Job>,
+    pub active_processes: HashMap<Uuid, tokio::process::Child>,
 }
 
 impl AppState {
     pub fn default() -> Self {
         Self {
             jobs: HashMap::new(),
+            active_processes: HashMap::new(),
         }
     }
 }

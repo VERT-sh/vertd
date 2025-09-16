@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, io::ErrorKind};
 
 use actix_web::{get, rt, web, Error, HttpRequest, HttpResponse};
 use actix_ws::AggregatedMessage;
@@ -32,8 +32,14 @@ pub enum Message {
         keep_metadata: bool,
     },
 
+    #[serde(rename = "cancelJob", rename_all = "camelCase")]
+    CancelJob { token: String, job_id: Uuid },
+
     #[serde(rename = "jobFinished", rename_all = "camelCase")]
     JobFinished { job_id: Uuid },
+
+    #[serde(rename = "jobCancelled", rename_all = "camelCase")]
+    JobCancelled { job_id: Uuid },
 
     #[serde(rename = "progressUpdate", rename_all = "camelCase")]
     ProgressUpdate(ProgressUpdate),
@@ -132,8 +138,8 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
 
                     let converter = Converter::new(from, to, speed, keep_metadata);
 
-                    let mut rx = match converter.convert(&mut job).await {
-                        Ok(rx) => rx,
+                    let (mut rx, process) = match converter.convert(&mut job).await {
+                        Ok((rx, process)) => (rx, process),
                         Err(e) => {
                             let message: String = Message::Error {
                                 message: format!("failed to convert: {}", e),
@@ -144,25 +150,106 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         }
                     };
 
-                    let mut logs = Vec::new();
+                    // store process in case user wants to cancel
+                    {
+                        let mut app_state = APP_STATE.lock().await;
+                        app_state.active_processes.insert(job_id, process);
+                    }
 
-                    while let Some(update) = rx.recv().await {
-                        match update {
-                            ProgressUpdate::Error(err) => {
-                                logs.push(err);
+                    let mut logs = Vec::new();
+                    let mut job_cancelled = false;
+
+                    // send progress updates and listen for cancellation
+                    loop {
+                        tokio::select! {
+                            update = rx.recv() => {
+                                match update {
+                                    Some(ProgressUpdate::Error(err)) => {
+                                        logs.push(err);
+                                    }
+                                    Some(progress) => {
+                                        let message: String = Message::ProgressUpdate(progress).into();
+                                        session.text(message).await.unwrap();
+                                    }
+                                    None => {
+                                        // conversion finished
+                                        break;
+                                    }
+                                }
                             }
-                            _ => {
-                                let message: String = Message::ProgressUpdate(update).into();
-                                session.text(message).await.unwrap();
+
+                            new_message = stream.next() => {
+                                if let Some(Ok(AggregatedMessage::Text(text))) = new_message {
+                                    if let Ok(parsed_message) = serde_json::from_str::<Message>(&text) {
+                                        if let Message::CancelJob { token: cancel_token, job_id: cancel_job_id } = parsed_message {
+                                            if cancel_job_id == job_id && cancel_token == token {
+                                                log::info!("cancelling job {}", job_id);
+
+                                                let mut app_state = APP_STATE.lock().await;
+                                                if let Some(mut process) = app_state.active_processes.remove(&job_id) {
+                                                    if let Err(e) = process.kill().await {
+                                                        log::error!("failed to kill process for job {}: {}", job_id, e);
+                                                    } else {
+                                                        log::info!("killed process for job {}", job_id);
+                                                        job_cancelled = true;
+                                                    }
+                                                }
+
+                                                if let Some(job) = app_state.jobs.get_mut(&job_id) {
+                                                    job.completed = true;
+                                                }
+                                                drop(app_state);
+
+                                                let message: String = Message::JobCancelled { job_id }.into();
+                                                session.text(message).await.unwrap();
+
+                                                break;
+                                            } else {
+                                                let message: String = Message::Error {
+                                                    message: "invalid token or job id for cancellation".to_string(),
+                                                }
+                                                .into();
+                                                session.text(message).await.unwrap();
+                                            }
+                                        }
+                                    }
+                                } else if new_message.is_none() {
+                                    // ws closed
+                                    break;
+                                }
                             }
                         }
                     }
 
-                    let mut app_state = APP_STATE.lock().await;
-                    if let Some(job) = app_state.jobs.get_mut(&job_id) {
-                        job.completed = true;
+                    {
+                        let mut app_state = APP_STATE.lock().await;
+                        if let Some(job) = app_state.jobs.get_mut(&job_id) {
+                            job.completed = true;
+                        }
+
+                        if !job_cancelled {
+                            // clean process only if not cancelled
+                            app_state.active_processes.remove(&job_id);
+                        } else {
+                            // clean up job if cancelled
+                            app_state.jobs.remove(&job_id);
+                            drop(app_state);
+
+                            if let Err(e) =
+                                fs::remove_file(&format!("input/{}.{}", job.id, job.from)).await
+                            {
+                                if e.kind() != ErrorKind::NotFound {
+                                    log::error!(
+                                        "failed to remove input file after cancellation: {}",
+                                        e
+                                    );
+                                }
+                            }
+                            continue;
+                        }
+
+                        drop(app_state);
                     }
-                    drop(app_state);
 
                     // check if output/{}.{} exists and isn't empty
                     let is_empty = fs::metadata(&format!("output/{}.{}", job_id, to.to_string()))
@@ -202,7 +289,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
 
                         let path = format!("output/{}.{}", job_id, to.to_string());
                         if let Err(e) = fs::remove_file(&path).await {
-                            if e.kind() != std::io::ErrorKind::NotFound {
+                            if e.kind() != ErrorKind::NotFound {
                                 log::error!("failed to remove output file: {}", e);
                             }
                         }

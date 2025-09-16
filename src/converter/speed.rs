@@ -60,6 +60,7 @@ impl ConversionSpeed {
 
                     ConverterGPU::AMD => {
                         #[cfg(target_os = "windows")]
+                        // amf encoder
                         match self {
                             ConversionSpeed::UltraFast | ConversionSpeed::Fast => {
                                 args.push("speed".to_string())
@@ -72,6 +73,7 @@ impl ConversionSpeed {
                             }
                         }
                         #[cfg(not(target_os = "windows"))]
+                        // vaapi encoder
                         match self {
                             ConversionSpeed::UltraFast => args.push("ultrafast".to_string()),
                             ConversionSpeed::Fast => args.push("fast".to_string()),
