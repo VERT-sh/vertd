@@ -13,6 +13,9 @@ This file covers how to get started with `vertd`.
 - [Running `vertd` on macOS/Linux](#running-vertd-on-macoslinux)
   - [Using systemd](#using-systemd)
   - [Using Docker](#using-docker)
+- [Manual GPU selection](#manual-gpu-selection)
+  - [CLI arguments](#cli-arguments)
+  - [Environment variable](#environment-variable)
 
 ## Installing dependencies
 
@@ -157,3 +160,23 @@ You can also try opening http://localhost:24153 in your favorite web browser.
 ### Using Docker
 
 Check out the [Docker Setup](./DOCKER_SETUP.md) page.
+
+## Manual GPU selection
+
+If `vertd` can't detect your GPU type or detects the wrong one, you can force `vertd` to use hardware acceleration for a specific vendor manually: `nvidia`, `amd`, `intel`, or `apple`.
+
+### CLI arguments
+
+Pass in the `--gpu` (or `-gpu`) argument with your vendor type (`nvidia`/`amd`/`intel`/`apple`) while starting `vertd`. For example:
+
+```shell
+$ ./vertd --gpu intel
+```
+
+### Environment variable
+
+You can set the `VERTD_FORCE_GPU` environment variable with your vendor type (`nvidia`/`amd`/`intel`/`apple`) in your shell config, or in your shell session temporarily. For example:
+
+```shell
+$ VERTD_FORCE_GPU=intel ./vertd
+```

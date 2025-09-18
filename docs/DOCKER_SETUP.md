@@ -10,6 +10,7 @@ This file covers how to set up `vertd` using Docker.
 - [With Compose (recommended)](#with-compose-recommended)
   - [Intel and AMD GPUs](#intel-and-amd-gpus-1)
   - [NVIDIA GPUs](#nvidia-gpus-1)
+- [Manual GPU selection](#manual-gpu-selection)
 
 > [!CAUTION]
 > Docker Desktop on macOS and Windows is currently unsupported.
@@ -135,13 +136,14 @@ Finally, bring the stack up by using:
 ```bash
 docker compose up
 ```
+
 If you see a `detected a NVIDIA GPU` message without any warnings, you should be ready to go.
 
+### Example of what your docker compose may look like
 
-
-### Example of docker compose may look like
 For Nvidia
 `docker-compose.nvidia.yml`
+
 ```yml
 version: "3.8"
 
@@ -153,6 +155,8 @@ services:
     ports:
       - "24153:24153"
     runtime: nvidia
+    environment:
+      - VERTD_FORCE_GPU=nvidia # optional: force GPU detection
     deploy:
       resources:
         reservations:
@@ -161,10 +165,12 @@ services:
               count: all
               capabilities: [gpu]
 ```
+
 `docker compose -f docker-compose.nvidia.yml up -d`
 
 For AMD
 `docker-compose.amd.yml`
+
 ```yml
 version: "3.8"
 
@@ -177,5 +183,32 @@ services:
       - "24153:24153"
     devices:
       - /dev/dri
+    environment:
+      - VERTD_FORCE_GPU=amd # optional: force GPU detection
 ```
+
 `docker compose -f docker-compose.amd.yml up -d`
+
+## Manual GPU selection
+
+If the automatic GPU detection doesn't work correctly, you can manually force `vertd` to use a specific GPU vendor by setting the `VERTD_FORCE_GPU` environment variable.
+
+Add the following to your Docker Compose service:
+
+```yaml
+environment:
+  - VERTD_FORCE_GPU=nvidia # or amd, intel, apple
+```
+
+For `docker run` commands, use:
+
+```diff
+$ docker run -d \
+    --name vertd \
+    --restart=unless-stopped \
++   -e VERTD_FORCE_GPU=nvidia \
+    -p 24153:24153 \
+    ghcr.io/vert-sh/vertd:latest
+```
+
+Valid values for `VERTD_FORCE_GPU` are: `nvidia`, `amd`, `intel`, or `apple`.
