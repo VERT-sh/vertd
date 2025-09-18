@@ -97,7 +97,7 @@ impl ConversionSpeed {
 
             ConverterFormat::GIF => {}
 
-            ConverterFormat::WebM | ConverterFormat::AVI => {
+            ConverterFormat::WebM | ConverterFormat::AVI | ConverterFormat::NUT => {
                 args.push("-speed".to_string());
                 match self {
                     ConversionSpeed::UltraFast => args.push("4".to_string()),
@@ -129,7 +129,9 @@ impl ConversionSpeed {
             | ConverterFormat::MXF
             | ConverterFormat::RM
             | ConverterFormat::RMVB
-            | ConverterFormat::SWF => {
+            | ConverterFormat::SWF
+            | ConverterFormat::AMV
+            | ConverterFormat::ASF => {
                 warn!("{:?} format does not support speed settings", to);
             }
         };

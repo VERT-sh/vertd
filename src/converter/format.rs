@@ -32,6 +32,9 @@ pub enum ConverterFormat {
     H264,
     DIVX,
     SWF,
+    AMV,
+    ASF,
+    NUT,
 }
 
 impl ConverterFormat {
@@ -136,7 +139,7 @@ impl Conversion {
                 ]
             }
 
-            ConverterFormat::AVI => vec![
+            ConverterFormat::NUT | ConverterFormat::AVI => vec![
                 "-c:v".to_string(),
                 "mpeg4".to_string(),
                 "-c:a".to_string(),
@@ -190,6 +193,28 @@ impl Conversion {
                 "libmp3lame".to_string(),
                 "-b:a".to_string(),
                 "192k".to_string(),
+            ],
+
+            ConverterFormat::ASF => vec![
+                "-c:v".to_string(),
+                "msmpeg4v3".to_string(),
+                "-c:a".to_string(),
+                "wmav2".to_string(),
+            ],
+
+            ConverterFormat::AMV => vec![
+                "-c:v".to_string(),
+                "amv".to_string(),
+                "-c:a".to_string(),
+                "adpcm_ima_amv".to_string(),
+                "-ac".to_string(),
+                "1".to_string(),
+                "-ar".to_string(),
+                "22050".to_string(),
+                "-r".to_string(),
+                "25".to_string(),
+                "-block_size".to_string(),
+                "882".to_string(),
             ],
         };
 
