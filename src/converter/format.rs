@@ -160,6 +160,8 @@ impl Conversion {
                     "mpeg2video".to_string(),
                     "-c:a".to_string(),
                     "pcm_s16le".to_string(),
+                    "-strict".to_string(),
+                    "unofficial".to_string(),
                 ]
             }
 
