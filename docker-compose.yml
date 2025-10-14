@@ -6,6 +6,7 @@ services:
       - PORT=${PORT:-24153}
       - WEBHOOK_URL=${WEBHOOK_URL}
       - WEBHOOK_PINGS=${WEBHOOK_PINGS}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
     ports:
       - "${PORT:-24153}:${PORT:-24153}"
 
