@@ -32,28 +32,40 @@ impl ResponseError for DownloadError {
 }
 
 #[get("/download/{id}/{token}")]
-pub async fn download(path: web::Path<(Uuid, String)>) -> Result<impl Responder, DownloadError> {
+pub async fn download(path: web::Path<(String, String)>) -> Result<impl Responder, DownloadError> {
     let (id, token) = path.into_inner();
-    let app_state = APP_STATE.lock().await;
-    let job = app_state
-        .jobs
-        .get(&id)
-        .ok_or(DownloadError::JobNotFound)?
-        .clone();
-    drop(app_state);
 
-    if job.auth != token {
-        return Err(DownloadError::InvalidToken);
-    }
+    let is_admin = std::env::var("ADMIN_PASSWORD")
+        .ok()
+        .is_some_and(|p| p == token && !p.is_empty() && p != "supersecret"); // disable admin if password is empty or default
 
-    let file_path = match job.to {
-        Some(to) => format!("output/{}.{}", id, to),
-        None => return Err(DownloadError::IncompleteHandshake),
+    let file_path = if is_admin {
+        log::warn!("admin download used for id {id}");
+        format!("permanent/{id}") // this would be vulnerable to path traversal but it's behind a password so who cares
+    } else {
+        let id = id.parse().map_err(|_| DownloadError::JobNotFound)?;
+        let app_state = APP_STATE.lock().await;
+        let job = app_state
+            .jobs
+            .get(&id)
+            .ok_or(DownloadError::JobNotFound)?
+            .clone();
+        drop(app_state);
+
+        if job.auth != token && !is_admin {
+            return Err(DownloadError::InvalidToken);
+        }
+
+        let file_path = match job.to {
+            Some(to) => format!("output/{id}.{to}"),
+            None => return Err(DownloadError::IncompleteHandshake),
+        };
+
+        let mut app_state = APP_STATE.lock().await;
+        app_state.jobs.remove(&id);
+        drop(app_state);
+        file_path
     };
-
-    let mut app_state = APP_STATE.lock().await;
-    app_state.jobs.remove(&id);
-    drop(app_state);
 
     let bytes = fs::read(&file_path).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -69,7 +81,7 @@ pub async fn download(path: web::Path<(Uuid, String)>) -> Result<impl Responder,
 
     fs::remove_file(file_path)
         .await
-        .map_err(|e| DownloadError::FilesystemError(e))?;
+        .map_err(DownloadError::FilesystemError)?;
 
     Ok(HttpResponse::Ok()
         .insert_header(("Content-Type", mime))

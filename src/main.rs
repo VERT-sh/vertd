@@ -45,7 +45,10 @@ fn parse_gpu(gpu_str: &str) -> anyhow::Result<ConverterGPU> {
         "intel" => Ok(ConverterGPU::Intel),
         "nvidia" => Ok(ConverterGPU::NVIDIA),
         "apple" => Ok(ConverterGPU::Apple),
-        _ => Err(anyhow::anyhow!("{}. Valid options: amd, intel, nvidia, apple", gpu_str)),
+        _ => Err(anyhow::anyhow!(
+            "{}. Valid options: amd, intel, nvidia, apple",
+            gpu_str
+        )),
     }
 }
 
@@ -72,11 +75,17 @@ fn get_forced_gpu() -> Option<ConverterGPU> {
     if let Ok(gpu_env) = env::var("VERTD_FORCE_GPU") {
         match parse_gpu(&gpu_env) {
             Ok(gpu) => {
-                info!("Using GPU from environment variable VERTD_FORCE_GPU: {}", gpu);
+                info!(
+                    "Using GPU from environment variable VERTD_FORCE_GPU: {}",
+                    gpu
+                );
                 return Some(gpu);
             }
             Err(e) => {
-                warn!("Invalid GPU specified in VERTD_FORCE_GPU environment variable: {}", e);
+                warn!(
+                    "Invalid GPU specified in VERTD_FORCE_GPU environment variable: {}",
+                    e
+                );
             }
         }
     }
@@ -140,6 +149,13 @@ async fn main() -> anyhow::Result<()> {
     // create input/ and output/ directories
     fs::create_dir("input").await?;
     fs::create_dir("output").await?;
+
+    // also a permanent/ directory for kept files
+    match fs::create_dir("permanent").await {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e.into()),
+    }
 
     start_http().await?;
     Ok(())

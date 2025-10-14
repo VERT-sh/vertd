@@ -12,10 +12,17 @@ pub struct Job {
     pub auth: String,
     pub from: String,
     pub to: Option<String>,
-    pub completed: bool,
+    pub state: JobState,
     total_frames: Option<u64>,
     bitrate: Option<u64>,
     fps: Option<u32>,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+pub enum JobState {
+    Processing,
+    Completed,
+    Failed,
 }
 
 impl Job {
@@ -25,11 +32,23 @@ impl Job {
             auth: auth_token,
             from,
             to: None,
-            completed: false,
+            state: JobState::Processing,
             total_frames: None,
             bitrate: None,
             fps: None,
         }
+    }
+
+    pub fn completed(&self) -> bool {
+        self.state == JobState::Completed
+    }
+
+    pub fn errored(&self) -> bool {
+        self.state == JobState::Failed
+    }
+
+    pub fn processing(&self) -> bool {
+        self.state == JobState::Processing
     }
 
     // TODO: scale based on resolution

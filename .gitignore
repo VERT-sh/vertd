@@ -1,6 +1,7 @@
 /target
 /output
 /input
+/permanent
 ffmpeg.exe
 ffmpeg
 ffprobe.exe

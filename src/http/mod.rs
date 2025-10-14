@@ -3,6 +3,8 @@ use actix_web::{web, App, HttpServer};
 use log::info;
 use services::{download::download, upload::upload, version::version, websocket::websocket};
 
+use crate::http::services::keep::keep;
+
 mod response;
 mod services;
 
@@ -19,9 +21,9 @@ pub async fn start_http() -> anyhow::Result<()> {
                 web::scope("/api")
                     .service(upload)
                     .service(download)
-                    // .route("/ws", web::get().to(websocket)),
                     .service(websocket)
-                    .service(version),
+                    .service(version)
+                    .service(keep),
             )
     });
     let port = std::env::var("PORT").unwrap_or_else(|_| "24153".to_string());
