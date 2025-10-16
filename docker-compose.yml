@@ -1,7 +1,8 @@
 services:
   vertd:
-    build: .
+    container_name: vertd
     image: ghcr.io/vert-sh/vertd:latest
+    build: .
     environment:
       - PORT=${PORT:-24153}
       - WEBHOOK_URL=${WEBHOOK_URL}
