@@ -38,6 +38,8 @@ RUN rm -rf \
     /var/lib/apt/lists/* \
     /var/tmp/*
 
+EXPOSE 24153/tcp
+
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD sh -c "curl --fail --silent --output /dev/null http://localhost:${PORT:-24153}/api/version || exit 1"
 
