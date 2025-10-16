@@ -10,6 +10,7 @@ This file covers how to get started with `vertd`.
     - [Arch Linux](#arch-linux)
     - [Fedora](#fedora)
 - [Downloading the server binaries](#downloading-the-server-binaries)
+- [Running `vertd` on Windows](#running-vertd-on-windows)
 - [Running `vertd` on macOS/Linux](#running-vertd-on-macoslinux)
   - [Using systemd](#using-systemd)
   - [Using Docker](#using-docker)
@@ -77,6 +78,13 @@ Grab the latest `vertd` release for your operating system and architecture from 
 
 > [!NOTE]
 > If you're using an Intel-based Mac, download the `vertd-mac-x86_64` executable. For Mac computers with Apple silicon (M1 or newer), download `vertd-mac-arm64` instead.
+
+## Running `vertd` on Windows
+
+Simply navigate to the directory where you downloaded the server binary, then open it like any other program.
+
+> [!IMPORTANT]
+> It's very likely you will get a SmartScreen pop-up on Windows. You can ignore it by pressing `More info` and then `Run anyway`. However, if you don't trust the file, you can always inspect and compile the code yourself.
 
 ## Running `vertd` on macOS/Linux
 
