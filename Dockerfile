@@ -20,6 +20,7 @@ COPY --from=builder /build/target/release/vertd ./vertd
 
 # https://github.com/NVIDIA/nvidia-container-toolkit/issues/140#issuecomment-1927273909
 RUN apt-get update && apt-get install -y \
+    curl \
     ffmpeg \
     mesa-va-drivers \
     intel-media-va-driver \
@@ -36,5 +37,8 @@ RUN rm -rf \
     /tmp/* \
     /var/lib/apt/lists/* \
     /var/tmp/*
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD sh -c "curl --fail --silent --output /dev/null http://localhost:${PORT:-24153}/api/version || exit 1"
 
 ENTRYPOINT ["./vertd"]
