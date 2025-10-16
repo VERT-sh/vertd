@@ -1,8 +1,42 @@
-.git
-input
-output
-target
+# os-specific stuff
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# code editors
+.vscode/
+
+# git & docs
+.git/
+.github/
+docs/
+LICENSE
+.gitignore
+.gitattributes
+*.md
+
+# docker
+.dockerignore
+docker-compose.yml
+Dockerfile
+
+# environment variables
+*.env*
+
+# vertd folders
+permanent/
+input/
+output/
+
+# rust output
+target/
+
+# ffmpeg
 ffmpeg.exe
 ffmpeg
 ffprobe.exe
 ffprobe
+
+# nix stuff
+flake.nix
+flake.lock
