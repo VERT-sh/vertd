@@ -1,15 +1,15 @@
 services:
   vertd:
-    build: .
+    container_name: vertd
     image: ghcr.io/vert-sh/vertd:latest
+    build: .
     environment:
-      - PORT=${PORT:-24153}
       - WEBHOOK_URL=${WEBHOOK_URL}
       - WEBHOOK_PINGS=${WEBHOOK_PINGS}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - PUBLIC_URL=${PUBLIC_URL}
     ports:
-      - "${PORT:-24153}:${PORT:-24153}"
+      - "${PORT:-24153}:24153"
 
     # For AMD/Intel GPUs, uncomment the "devices" section - then remove
     # or comment out the "deploy" section and the "runtime" string used
