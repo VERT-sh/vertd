@@ -163,7 +163,7 @@ To check the status of `vertd`, run:
 $ sudo systemctl status vertd
 ```
 
-You can also try opening http://localhost:24153 in your favorite web browser.
+You can also try opening http://localhost:24153/api/version in your favorite web browser.
 
 ### Using Docker
 
