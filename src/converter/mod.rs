@@ -40,6 +40,7 @@ impl Converter {
     pub async fn convert(
         &self,
         job: &mut Job,
+        gpu: &gpu::ConverterGPU,
     ) -> anyhow::Result<(mpsc::Receiver<ProgressUpdate>, tokio::process::Child)> {
         let (tx, rx) = mpsc::channel(1);
         let input_filename = format!("input/{}.{}", job.id, self.conversion.from.to_string());
@@ -51,7 +52,7 @@ impl Converter {
         let (gpu, (bitrate, fps)) = tokio::try_join!(gpu::get_gpu(), job.bitrate_and_fps())?;
         let args = self
             .conversion
-            .to_args(&self.speed, &gpu, bitrate, fps)
+            .to_args(&self.speed, gpu, bitrate, fps)
             .await?;
         let args = args.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
         let args = args.as_slice();

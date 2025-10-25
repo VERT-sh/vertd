@@ -143,7 +143,23 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
 
                 let converter = Converter::new(from, to, speed, keep_metadata);
 
-                let (mut rx, process) = match converter.convert(&mut job).await {
+                let gpu = {
+                    let app_state = APP_STATE.lock().await;
+                    app_state.gpu.ok_or_else(|| {
+                        "GPU not initialized, please restart vertd.".to_string()
+                    })
+                };
+
+                let gpu = match gpu {
+                    Ok(gpu) => gpu,
+                    Err(msg) => {
+                        let message: String = Message::Error { message: msg }.into();
+                        session.text(message).await.unwrap();
+                        continue;
+                    }
+                };
+
+                let (mut rx, process) = match converter.convert(&mut job, &gpu).await {
                     Ok((rx, process)) => (rx, process),
                     Err(e) => {
                         let message: String = Message::Error {
@@ -270,13 +286,13 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     }
                     drop(app_state);
                     log::error!("job {} failed", job_id);
-                    
+
                     let error_message = if logs.is_empty() {
                         "No error logs.".to_string()
                     } else {
                         logs.join("\n")
                     };
-                    
+
                     let message: String = Message::Error {
                         message: error_message,
                     }

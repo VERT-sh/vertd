@@ -4,11 +4,12 @@ use lazy_static::lazy_static;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::converter::job::Job;
+use crate::converter::{gpu::ConverterGPU, job::Job};
 
 pub struct AppState {
     pub jobs: HashMap<Uuid, Job>,
     pub active_processes: HashMap<Uuid, tokio::process::Child>,
+    pub gpu: Option<ConverterGPU>,
 }
 
 impl AppState {
@@ -16,6 +17,7 @@ impl AppState {
         Self {
             jobs: HashMap::new(),
             active_processes: HashMap::new(),
+            gpu: None,
         }
     }
 }

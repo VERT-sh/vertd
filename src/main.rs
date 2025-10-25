@@ -59,11 +59,11 @@ fn get_forced_gpu() -> Option<ConverterGPU> {
         if let Some(gpu_value) = args.get(gpu_arg_pos + 1) {
             match parse_gpu(gpu_value) {
                 Ok(gpu) => {
-                    info!("Using GPU from command line argument: {}", gpu);
+                    info!("using GPU from command line argument: {}", gpu);
                     return Some(gpu);
                 }
                 Err(e) => {
-                    warn!("Invalid GPU specified in command line argument: {}", e);
+                    warn!("invalid GPU specified in command line argument: {}", e);
                 }
             }
         } else {
@@ -76,14 +76,14 @@ fn get_forced_gpu() -> Option<ConverterGPU> {
         match parse_gpu(&gpu_env) {
             Ok(gpu) => {
                 info!(
-                    "Using GPU from environment variable VERTD_FORCE_GPU: {}",
+                    "using GPU from environment variable VERTD_FORCE_GPU: {}",
                     gpu
                 );
                 return Some(gpu);
             }
             Err(e) => {
                 warn!(
-                    "Invalid GPU specified in VERTD_FORCE_GPU environment variable: {}",
+                    "invalid GPU specified in VERTD_FORCE_GPU environment variable: {}",
                     e
                 );
             }
@@ -125,7 +125,7 @@ async fn main() -> anyhow::Result<()> {
         None => get_gpu().await,
     };
 
-    match gpu {
+    match &gpu {
         Ok(gpu) => info!(
             "detected a{} {} GPU -- if this isn't your vendor, open an issue.",
             match gpu {
@@ -140,6 +140,11 @@ async fn main() -> anyhow::Result<()> {
             error!("failed to get GPU vendor: {}", e);
             error!("vertd will still work, but it's going to be incredibly slow. be warned!");
         }
+    }
+
+    if let Ok(gpu) = gpu {
+        let mut app_state = state::APP_STATE.lock().await;
+        app_state.gpu = Some(gpu);
     }
 
     // remove input/ and output/ recursively if they exist -- we don't care if this fails tho
