@@ -2,7 +2,6 @@
 
 use actix_web::{get, web, HttpResponse, Responder, ResponseError};
 use tokio::fs;
-use uuid::Uuid;
 
 use crate::{http::response::ApiResponse, state::APP_STATE};
 

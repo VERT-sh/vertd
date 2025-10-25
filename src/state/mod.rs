@@ -10,6 +10,7 @@ pub struct AppState {
     pub jobs: HashMap<Uuid, Job>,
     pub active_processes: HashMap<Uuid, tokio::process::Child>,
     pub gpu: Option<ConverterGPU>,
+    pub vaapi_device_path: Option<String>,
 }
 
 impl AppState {
@@ -18,6 +19,7 @@ impl AppState {
             jobs: HashMap::new(),
             active_processes: HashMap::new(),
             gpu: None,
+            vaapi_device_path: None,
         }
     }
 }

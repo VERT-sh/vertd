@@ -2,7 +2,7 @@
 
 use actix_web::{
     post,
-    web::{self, Json},
+    web::Json,
     HttpResponse, Responder, ResponseError,
 };
 use discord_webhook2::{message, webhook::DiscordWebhook};

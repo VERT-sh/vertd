@@ -41,6 +41,7 @@ impl Converter {
         &self,
         job: &mut Job,
         gpu: &gpu::ConverterGPU,
+        vaapi_device_path: Option<&str>,
     ) -> anyhow::Result<(mpsc::Receiver<ProgressUpdate>, tokio::process::Child)> {
         let (tx, rx) = mpsc::channel(1);
         let input_filename = format!("input/{}.{}", job.id, self.conversion.from.to_string());
@@ -49,14 +50,15 @@ impl Converter {
         // let bitrate = job.bitrate().await?;
         // let fps = job.fps().await?;
         // the above but we run in parallel
-        let (gpu, (bitrate, fps)) = tokio::try_join!(gpu::get_gpu(), job.bitrate_and_fps())?;
+        let (bitrate, fps) = job.bitrate_and_fps().await?;
         let args = self
             .conversion
             .to_args(&self.speed, gpu, bitrate, fps)
             .await?;
         let args = args.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
         let args = args.as_slice();
-        let gpu_args: &[&str] = gpu.hwaccel_args();
+        let gpu_args = gpu.hwaccel_args(vaapi_device_path);
+        let gpu_args_refs: Vec<&str> = gpu_args.iter().map(|s| s.as_str()).collect();
 
         let metadata_args: &[&str] = if self.keep_metadata {
             &["-map_metadata", "0", "-map_chapters", "0"]
@@ -65,8 +67,8 @@ impl Converter {
         };
 
         let command = &[
-            &["-hide_banner", "-loglevel", "error", "-progress", "pipe:1"],
-            gpu_args,
+            &["-hide_banner", "-loglevel", "error", "-progress", "pipe:1"][..],
+            &gpu_args_refs[..],
             &["-i", &input_filename],
             args,
             metadata_args,

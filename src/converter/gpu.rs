@@ -49,21 +49,31 @@ impl ConverterGPU {
         }
     }
 
-    pub fn hwaccel_args(&self) -> &[&str] {
+    #[allow(unused_variables)]
+    pub fn hwaccel_args(&self, vaapi_device_path: Option<&str>) -> Vec<String> {
         #[cfg(target_os = "linux")]
         match self {
-            ConverterGPU::NVIDIA => &["-hwaccel", "cuda"],
-            ConverterGPU::Apple => &["-hwaccel", "videotoolbox"],
-            ConverterGPU::AMD => &["-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi"],
-            ConverterGPU::Intel => &["-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi"],
+            ConverterGPU::NVIDIA => vec!["-hwaccel".to_string(), "cuda".to_string()],
+            ConverterGPU::Apple => vec!["-hwaccel".to_string(), "videotoolbox".to_string()],
+            ConverterGPU::AMD | ConverterGPU::Intel => {
+                let mut args = vec!["-hwaccel".to_string(), "vaapi".to_string()];
+
+                let device_path = vaapi_device_path.unwrap_or("/dev/dri/renderD128");
+
+                args.push("-vaapi_device".to_string());
+                args.push(device_path.to_string());
+                args.push("-hwaccel_output_format".to_string());
+                args.push("vaapi".to_string());
+                args
+            }
         }
 
         #[cfg(not(target_os = "linux"))]
         match self {
-            ConverterGPU::NVIDIA => &["-hwaccel", "cuda"],
-            ConverterGPU::Apple => &["-hwaccel", "videotoolbox"],
-            ConverterGPU::AMD => &["-hwaccel", "amf"],
-            ConverterGPU::Intel => &["-hwaccel", "qsv"],
+            ConverterGPU::NVIDIA => vec!["-hwaccel".to_string(), "cuda".to_string()],
+            ConverterGPU::Apple => vec!["-hwaccel".to_string(), "videotoolbox".to_string()],
+            ConverterGPU::AMD => vec!["-hwaccel".to_string(), "amf".to_string()],
+            ConverterGPU::Intel => vec!["-hwaccel".to_string(), "qsv".to_string()],
         }
     }
 }

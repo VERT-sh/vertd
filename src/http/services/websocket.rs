@@ -143,11 +143,13 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
 
                 let converter = Converter::new(from, to, speed, keep_metadata);
 
-                let gpu = {
+                let (gpu, vaapi_device_path) = {
                     let app_state = APP_STATE.lock().await;
-                    app_state.gpu.ok_or_else(|| {
-                        "GPU not initialized, please restart vertd.".to_string()
-                    })
+                    let gpu = app_state
+                        .gpu
+                        .ok_or_else(|| "GPU not initialized, please restart vertd.".to_string());
+                    let device_path = app_state.vaapi_device_path.clone();
+                    (gpu, device_path)
                 };
 
                 let gpu = match gpu {
@@ -159,7 +161,10 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     }
                 };
 
-                let (mut rx, process) = match converter.convert(&mut job, &gpu).await {
+                let (mut rx, process) = match converter
+                    .convert(&mut job, &gpu, vaapi_device_path.as_deref())
+                    .await
+                {
                     Ok((rx, process)) => (rx, process),
                     Err(e) => {
                         let message: String = Message::Error {

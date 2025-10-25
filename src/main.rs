@@ -93,6 +93,36 @@ fn get_forced_gpu() -> Option<ConverterGPU> {
     None
 }
 
+fn get_vaapi_device_path() -> Option<String> {
+    // cli argument (-vaapi-device <value>)
+    let args: Vec<String> = env::args().collect();
+    if let Some(vaapi_arg_pos) = args
+        .iter()
+        .position(|arg| arg == "-vaapi-device" || arg == "--vaapi-device")
+    {
+        if let Some(device_value) = args.get(vaapi_arg_pos + 1) {
+            info!(
+                "using VA-API device path from command line argument: {}",
+                device_value
+            );
+            return Some(device_value.clone());
+        } else {
+            warn!("VA-API device path argument specified but no value provided");
+        }
+    }
+
+    // environment variable
+    if let Ok(device_path) = env::var("VERTD_VAAPI_DEVICE_PATH") {
+        info!(
+            "using VA-API device path from environment variable VERTD_VAAPI_DEVICE_PATH: {}",
+            device_path
+        );
+        return Some(device_path);
+    }
+
+    None
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenv().ok();
@@ -125,17 +155,31 @@ async fn main() -> anyhow::Result<()> {
         None => get_gpu().await,
     };
 
+    // get VA-API device path from CLI or env var
+    let vaapi_device_path = get_vaapi_device_path();
+
     match &gpu {
-        Ok(gpu) => info!(
-            "detected a{} {} GPU -- if this isn't your vendor, open an issue.",
-            match gpu {
-                converter::gpu::ConverterGPU::AMD => "n",
-                converter::gpu::ConverterGPU::Apple => "n",
-                converter::gpu::ConverterGPU::Intel => "n",
-                _ => "",
-            },
-            gpu
-        ),
+        Ok(gpu) => {
+            info!(
+                "detected a{} {} GPU -- if this isn't your vendor, open an issue.",
+                match gpu {
+                    ConverterGPU::AMD => "n",
+                    ConverterGPU::Apple => "n",
+                    ConverterGPU::Intel => "n",
+                    _ => "",
+                },
+                gpu
+            );
+
+            #[cfg(target_os = "linux")]
+            if matches!(gpu, ConverterGPU::AMD | ConverterGPU::Intel) {
+                let device_path = vaapi_device_path
+                    .as_ref()
+                    .map(|s| s.as_str())
+                    .unwrap_or("/dev/dri/renderD128");
+                info!("using VA-API device path: {}", device_path);
+            }
+        }
         Err(e) => {
             error!("failed to get GPU vendor: {}", e);
             error!("vertd will still work, but it's going to be incredibly slow. be warned!");
@@ -145,6 +189,7 @@ async fn main() -> anyhow::Result<()> {
     if let Ok(gpu) = gpu {
         let mut app_state = state::APP_STATE.lock().await;
         app_state.gpu = Some(gpu);
+        app_state.vaapi_device_path = vaapi_device_path;
     }
 
     // remove input/ and output/ recursively if they exist -- we don't care if this fails tho
