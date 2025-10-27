@@ -146,18 +146,26 @@ impl Conversion {
                 "libmp3lame".to_string(),
             ],
 
-            ConverterFormat::MPEG | ConverterFormat::MPG | ConverterFormat::VOB => vec![
-                "-c:v".to_string(),
-                "mpeg2video".to_string(),
-                "-c:a".to_string(),
-                "mp2".to_string(),
-            ],
+            ConverterFormat::MPEG | ConverterFormat::MPG | ConverterFormat::VOB => {
+                let encoder = self
+                    .accelerated_or_default_codec(gpu, &["mpeg2"], "mpeg2video")
+                    .await;
+                vec![
+                    "-c:v".to_string(),
+                    encoder,
+                    "-c:a".to_string(),
+                    "mp2".to_string(),
+                ]
+            }
 
             // there is more formats that mxf supports (e.g. on cameras)
             ConverterFormat::MXF => {
+                let encoder = self
+                    .accelerated_or_default_codec(gpu, &["mpeg2"], "mpeg2video")
+                    .await;
                 vec![
                     "-c:v".to_string(),
-                    "mpeg2video".to_string(),
+                    encoder,
                     "-c:a".to_string(),
                     "pcm_s16le".to_string(),
                     "-strict".to_string(),
