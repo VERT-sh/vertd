@@ -171,20 +171,66 @@ Check out the [Docker Setup](./DOCKER_SETUP.md) page.
 
 ## Manual GPU selection
 
-If `vertd` can't detect your GPU type or detects the wrong one, you can force `vertd` to use hardware acceleration for a specific vendor manually: `nvidia`, `amd`, `intel`, or `apple`.
+If `vertd` can't detect your GPU type or detects the wrong one, you can force `vertd` to use hardware acceleration for a specific vendor manually: `nvidia`, `amd`, `intel`, `apple`, or `cpu` (for software encoding).
 
 ### CLI arguments
 
-Pass in the `--gpu` (or `-gpu`) argument with your vendor type (`nvidia`/`amd`/`intel`/`apple`) while starting `vertd`. For example:
+Pass in the `--gpu` (or `-gpu`) argument with your vendor type (`nvidia`/`amd`/`intel`/`apple`/`cpu`) while starting `vertd`. For example:
 
 ```shell
 $ ./vertd --gpu intel
 ```
 
+To use CPU rendering (software encoding):
+
+```shell
+$ ./vertd --gpu cpu
+```
+
 ### Environment variable
 
-You can set the `VERTD_FORCE_GPU` environment variable with your vendor type (`nvidia`/`amd`/`intel`/`apple`) in your shell config, or in your shell session temporarily. For example:
+You can set the `VERTD_FORCE_GPU` environment variable with your vendor type (`nvidia`/`amd`/`intel`/`apple`/`cpu`) in your shell config, or in your shell session temporarily. For example:
 
 ```shell
 $ VERTD_FORCE_GPU=intel ./vertd
 ```
+
+Or to force CPU rendering:
+
+```shell
+$ VERTD_FORCE_GPU=cpu ./vertd
+```
+
+### Automatic CPU fallback
+
+If GPU detection fails for any reason, `vertd` will automatically fall back to CPU rendering. You'll see warning messages in the logs:
+
+```text
+[ERROR] failed to get GPU vendor: <error details>
+[WARN] falling back to CPU rendering (software encoding) -- this will be slower than GPU acceleration
+```
+
+This ensures that `vertd` continues to work even on systems without GPU support, albeit slower than with GPU acceleration.
+
+## VA-API device path configuration
+
+By default, `vertd` uses `/dev/dri/renderD128` as the VA-API device path for Intel and AMD GPUs on Linux. If your system uses a different device path (e.g., `/dev/dri/renderD129`), you can configure it:
+
+### CLI arguments
+
+Use the `--vaapi-device` (or `-vaapi-device`) argument when starting `vertd`:
+
+```shell
+$ ./vertd --vaapi-device /dev/dri/renderD129
+```
+
+### Environment variable
+
+Set the `VERTD_VAAPI_DEVICE_PATH` environment variable:
+
+```shell
+$ VERTD_VAAPI_DEVICE_PATH=/dev/dri/renderD129 ./vertd
+```
+
+> [!NOTE]
+> This setting only affects Intel and AMD GPUs on Linux. It has no effect on NVIDIA GPUs, Apple GPUs, or other platforms.

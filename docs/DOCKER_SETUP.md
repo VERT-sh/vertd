@@ -68,6 +68,9 @@ $ docker run -d \
     ghcr.io/vert-sh/vertd:latest
 ```
 
+> [!TIP]
+> If your GPU device is not at `/dev/dri/renderD128` (the default), you can specify a custom VA-API device path using the `VERTD_VAAPI_DEVICE_PATH` environment variable or the `--vaapi-device` CLI argument. See [VA-API device path configuration](#va-api-device-path-configuration) for more details.
+
 ### NVIDIA GPUs
 
 If you have a NVIDIA GPU, you'll need to add the `--runtime=nvidia` and `--gpus all` parameters to your `docker run` command. It should end up looking something like this:
@@ -183,7 +186,7 @@ If you see a `detected a NVIDIA GPU` message without any warnings, you should be
 
 If the automatic GPU detection doesn't work correctly, you can manually force `vertd` to use a specific GPU vendor by setting the `VERTD_FORCE_GPU` environment variable.
 
-Valid values for `VERTD_FORCE_GPU` are: `nvidia`, `amd`, `intel`, or `apple`.
+Valid values for `VERTD_FORCE_GPU` are: `nvidia`, `amd`, `intel`, `apple`, or `cpu`.
 
 For Docker Compose configurations, add:
 
@@ -202,3 +205,76 @@ $ docker run -d \
     -p 24153:24153 \
     ghcr.io/vert-sh/vertd:latest
 ```
+
+## CPU-only mode
+
+If you don't have a GPU or want to use CPU rendering (software encoding), you can set `VERTD_FORCE_GPU=cpu`:
+
+```yaml
+environment:
+  - VERTD_FORCE_GPU=cpu
+```
+
+Or with `docker run`:
+
+```diff
+$ docker run -d \
+    --name vertd \
+    --restart=unless-stopped \
++   -e VERTD_FORCE_GPU=cpu \
+    -p 24153:24153 \
+    ghcr.io/vert-sh/vertd:latest
+```
+
+> [!NOTE]
+> CPU rendering uses software encoders (like libx264) which are significantly slower than GPU-accelerated encoding. This mode is useful for systems without GPU support or for testing purposes.
+
+### Automatic CPU fallback
+
+If GPU detection fails for any reason, `vertd` will automatically fall back to CPU rendering. For Docker users, you'll see a warning message in the logs similar to:
+
+```text
+[WARN] *******
+[WARN] you're running vertd on a docker container, but no GPU was detected.
+[WARN] this usually is because you're running Docker under WSL or because
+[WARN] you are not passing the GPU device correctly.
+[WARN] 
+[WARN] if this doesn't seem right, make sure to provide the following info when
+[WARN] asking for help:
+[WARN] - adapter name: <adapter name>
+[WARN] - adapter vendor: 0x<VENDOR_ID>
+[WARN] - backend: <backend>
+[WARN] - device ID: <device id>
+[WARN] - device type: <device type>
+[WARN] - driver: <driver>
+[WARN] - driver info: <driver info>
+[WARN] 
+[WARN] vertd will fall back to CPU rendering to ensure conversions can still proceed.
+[WARN] *******
+```
+
+This ensures that `vertd` continues to work even on systems without GPU support, albeit slower than with GPU acceleration.
+
+## VA-API device path configuration
+
+By default, `vertd` uses `/dev/dri/renderD128` as the VA-API device path for Intel and AMD GPUs on Linux. If your system uses a different device path (e.g., `/dev/dri/renderD129`), you can configure it by setting `VERTD_VAAPI_DEVICE_PATH` to your device path:
+
+```yaml
+environment:
+  - VERTD_VAAPI_DEVICE_PATH=/dev/dri/renderD129
+```
+
+Or with `docker run`:
+
+```diff
+$ docker run -d \
+    --name vertd \
+    --restart=unless-stopped \
+    --device=/dev/dri:/dev/dri \
++   -e VERTD_VAAPI_DEVICE_PATH=/dev/dri/renderD129 \
+    -p 24153:24153 \
+    ghcr.io/vert-sh/vertd:latest
+```
+
+> [!NOTE]
+> This setting only affects Intel and AMD GPUs on Linux, which use VA-API for hardware acceleration. It has no effect on NVIDIA GPUs, Apple GPUs, or other platforms.
