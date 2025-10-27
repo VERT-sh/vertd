@@ -45,8 +45,9 @@ fn parse_gpu(gpu_str: &str) -> anyhow::Result<ConverterGPU> {
         "intel" => Ok(ConverterGPU::Intel),
         "nvidia" => Ok(ConverterGPU::NVIDIA),
         "apple" => Ok(ConverterGPU::Apple),
+        "cpu" => Ok(ConverterGPU::CPU),
         _ => Err(anyhow::anyhow!(
-            "{}. Valid options: amd, intel, nvidia, apple",
+            "{}. Valid options: amd, intel, nvidia, apple, cpu",
             gpu_str
         )),
     }
@@ -160,16 +161,20 @@ async fn main() -> anyhow::Result<()> {
 
     match &gpu {
         Ok(gpu) => {
-            info!(
-                "detected a{} {} GPU -- if this isn't your vendor, open an issue.",
-                match gpu {
-                    ConverterGPU::AMD => "n",
-                    ConverterGPU::Apple => "n",
-                    ConverterGPU::Intel => "n",
-                    _ => "",
-                },
-                gpu
-            );
+            if matches!(gpu, ConverterGPU::CPU) {
+                info!("using CPU rendering (software encoding) -- this will be slower than GPU acceleration");
+            } else {
+                info!(
+                    "detected a{} {} GPU -- if this isn't your vendor, open an issue.",
+                    match gpu {
+                        ConverterGPU::AMD => "n",
+                        ConverterGPU::Apple => "n",
+                        ConverterGPU::Intel => "n",
+                        _ => "",
+                    },
+                    gpu
+                );
+            }
 
             #[cfg(target_os = "linux")]
             if matches!(gpu, ConverterGPU::AMD | ConverterGPU::Intel) {
@@ -182,11 +187,13 @@ async fn main() -> anyhow::Result<()> {
         }
         Err(e) => {
             error!("failed to get GPU vendor: {}", e);
-            error!("vertd will still work, but it's going to be incredibly slow. be warned!");
+            warn!("falling back to CPU rendering (software encoding) -- this will be slower than GPU acceleration");
         }
     }
 
-    if let Ok(gpu) = gpu {
+    // default to CPU if detection failed
+    let gpu = gpu.unwrap_or(ConverterGPU::CPU);
+    {
         let mut app_state = state::APP_STATE.lock().await;
         app_state.gpu = Some(gpu);
         app_state.vaapi_device_path = vaapi_device_path;

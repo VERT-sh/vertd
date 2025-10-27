@@ -10,10 +10,15 @@ pub enum ConverterGPU {
     Intel,
     NVIDIA,
     Apple,
+    CPU,
 }
 
 impl ConverterGPU {
     pub async fn get_accelerated_codec(&self, codec: &str) -> anyhow::Result<String> {
+        if matches!(self, ConverterGPU::CPU) {
+            return Err(anyhow!("CPU only uses software encoding, not hardware acceleration"));
+        }
+
         let priority = self.encoder_priority();
         let encoders = Command::new("ffmpeg")
             .args(["-hide_banner", "-encoders"])
@@ -38,6 +43,7 @@ impl ConverterGPU {
             ConverterGPU::Apple => vec!["videotoolbox"],
             ConverterGPU::AMD => vec!["vaapi"],
             ConverterGPU::Intel => vec!["vaapi"],
+            ConverterGPU::CPU => vec![],
         }
 
         #[cfg(not(target_os = "linux"))]
@@ -46,11 +52,17 @@ impl ConverterGPU {
             ConverterGPU::Apple => vec!["videotoolbox"],
             ConverterGPU::AMD => vec!["amf"],
             ConverterGPU::Intel => vec!["qsv"],
+            ConverterGPU::CPU => vec![],
         }
     }
 
     #[allow(unused_variables)]
     pub fn hwaccel_args(&self, vaapi_device_path: Option<&str>) -> Vec<String> {
+        // CPU mode doesn't use hardware acceleration
+        if matches!(self, ConverterGPU::CPU) {
+            return vec![];
+        }
+
         #[cfg(target_os = "linux")]
         match self {
             ConverterGPU::NVIDIA => vec!["-hwaccel".to_string(), "cuda".to_string()],
@@ -66,6 +78,7 @@ impl ConverterGPU {
                 args.push("vaapi".to_string());
                 args
             }
+            ConverterGPU::CPU => vec![], // should be redundant due to the check at the start of the function
         }
 
         #[cfg(not(target_os = "linux"))]
@@ -74,6 +87,7 @@ impl ConverterGPU {
             ConverterGPU::Apple => vec!["-hwaccel".to_string(), "videotoolbox".to_string()],
             ConverterGPU::AMD => vec!["-hwaccel".to_string(), "amf".to_string()],
             ConverterGPU::Intel => vec!["-hwaccel".to_string(), "qsv".to_string()],
+            ConverterGPU::CPU => vec![], // should be redundant due to the check at the start of the function
         }
     }
 }
@@ -85,6 +99,7 @@ impl Display for ConverterGPU {
             ConverterGPU::Intel => write!(f, "Intel"),
             ConverterGPU::NVIDIA => write!(f, "NVIDIA"),
             ConverterGPU::Apple => write!(f, "Apple"),
+            ConverterGPU::CPU => write!(f, "CPU"),
         }
     }
 }
@@ -134,11 +149,10 @@ pub async fn get_gpu() -> anyhow::Result<ConverterGPU> {
             warn!("- driver: {}", info.driver);
             warn!("- driver info: {}", info.driver_info);
             warn!("");
-            warn!("vertd will assume you have a NVIDIA GPU. if this isn't the case,");
-            warn!("conversions will likely fail.");
+            warn!("vertd will fall back to CPU rendering to ensure conversions can still proceed.");
             warn!("*******");
 
-            Ok(ConverterGPU::NVIDIA)
+            Ok(ConverterGPU::CPU)
         }
         _ => Err(anyhow!("unknown GPU vendor: 0x{:X}", info.vendor)),
     }
