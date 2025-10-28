@@ -238,7 +238,7 @@ If GPU detection fails for any reason, `vertd` will automatically fall back to C
 [WARN] you're running vertd on a docker container, but no GPU was detected.
 [WARN] this usually is because you're running Docker under WSL or because
 [WARN] you are not passing the GPU device correctly.
-[WARN] 
+[WARN]
 [WARN] if this doesn't seem right, make sure to provide the following info when
 [WARN] asking for help:
 [WARN] - adapter name: <adapter name>
@@ -248,7 +248,7 @@ If GPU detection fails for any reason, `vertd` will automatically fall back to C
 [WARN] - device type: <device type>
 [WARN] - driver: <driver>
 [WARN] - driver info: <driver info>
-[WARN] 
+[WARN]
 [WARN] vertd will fall back to CPU rendering to ensure conversions can still proceed.
 [WARN] *******
 ```
@@ -276,5 +276,6 @@ $ docker run -d \
     ghcr.io/vert-sh/vertd:latest
 ```
 
-> [!NOTE]
-> This setting only affects Intel and AMD GPUs on Linux, which use VA-API for hardware acceleration. It has no effect on NVIDIA GPUs, Apple GPUs, or other platforms.
+> [!IMPORTANT]
+> This setting only affects Intel and AMD GPUs on Linux, which use VA-API for hardware acceleration.
+> It has no effect on NVIDIA GPUs, Apple GPUs, or other platforms.

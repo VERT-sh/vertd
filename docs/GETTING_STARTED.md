@@ -232,5 +232,6 @@ Set the `VERTD_VAAPI_DEVICE_PATH` environment variable:
 $ VERTD_VAAPI_DEVICE_PATH=/dev/dri/renderD129 ./vertd
 ```
 
-> [!NOTE]
-> This setting only affects Intel and AMD GPUs on Linux. It has no effect on NVIDIA GPUs, Apple GPUs, or other platforms.
+> [!IMPORTANT]
+> This setting only affects Intel and AMD GPUs on Linux, which use VA-API for hardware acceleration.
+> It has no effect on NVIDIA GPUs, Apple GPUs, or other platforms.
