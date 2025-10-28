@@ -16,8 +16,8 @@ This file covers how to set up `vertd` using Docker.
 - [VA-API device path configuration](#va-api-device-path-configuration)
 
 > [!CAUTION]
-> Docker Desktop on macOS and Windows is unsupported.
-> It might work if you have a NVIDIA GPU, but no guarantees. You're on your own.
+> Hardware acceleration under Docker Desktop on Windows and macOS is unsupported.
+> It might work by [manually selecting the GPU vendor](#manual-gpu-selection), but you're on your own. Good luck.
 
 ## For NVIDIA users
 
