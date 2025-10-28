@@ -17,6 +17,10 @@ This file covers how to get started with `vertd`.
 - [Manual GPU selection](#manual-gpu-selection)
   - [CLI arguments](#cli-arguments)
   - [Environment variable](#environment-variable)
+  - [Automatic CPU fallback](#automatic-cpu-fallback)
+- [VA-API device path configuration](#va-api-device-path-configuration)
+  - [CLI arguments](#cli-arguments-1)
+  - [Environment variable](#environment-variable-1)
 
 ## Installing dependencies
 
@@ -232,5 +236,6 @@ Set the `VERTD_VAAPI_DEVICE_PATH` environment variable:
 $ VERTD_VAAPI_DEVICE_PATH=/dev/dri/renderD129 ./vertd
 ```
 
-> [!NOTE]
-> This setting only affects Intel and AMD GPUs on Linux. It has no effect on NVIDIA GPUs, Apple GPUs, or other platforms.
+> [!IMPORTANT]
+> This setting only affects Intel and AMD GPUs on Linux, which use VA-API for hardware acceleration.
+> It has no effect on NVIDIA GPUs, Apple GPUs, or other platforms.

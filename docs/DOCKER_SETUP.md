@@ -11,10 +11,13 @@ This file covers how to set up `vertd` using Docker.
   - [Intel and AMD GPUs](#intel-and-amd-gpus-1)
   - [NVIDIA GPUs](#nvidia-gpus-1)
 - [Manual GPU selection](#manual-gpu-selection)
+- [CPU-only mode](#cpu-only-mode)
+  - [Automatic CPU fallback](#automatic-cpu-fallback)
+- [VA-API device path configuration](#va-api-device-path-configuration)
 
 > [!CAUTION]
-> Docker Desktop on macOS and Windows is unsupported.
-> It might work if you have a NVIDIA GPU, but no guarantees. You're on your own.
+> Hardware acceleration under Docker Desktop on Windows and macOS is unsupported.
+> It might work by [manually selecting the GPU vendor](#manual-gpu-selection), but you're on your own. Good luck.
 
 ## For NVIDIA users
 
@@ -238,7 +241,7 @@ If GPU detection fails for any reason, `vertd` will automatically fall back to C
 [WARN] you're running vertd on a docker container, but no GPU was detected.
 [WARN] this usually is because you're running Docker under WSL or because
 [WARN] you are not passing the GPU device correctly.
-[WARN] 
+[WARN]
 [WARN] if this doesn't seem right, make sure to provide the following info when
 [WARN] asking for help:
 [WARN] - adapter name: <adapter name>
@@ -248,7 +251,7 @@ If GPU detection fails for any reason, `vertd` will automatically fall back to C
 [WARN] - device type: <device type>
 [WARN] - driver: <driver>
 [WARN] - driver info: <driver info>
-[WARN] 
+[WARN]
 [WARN] vertd will fall back to CPU rendering to ensure conversions can still proceed.
 [WARN] *******
 ```
@@ -276,5 +279,6 @@ $ docker run -d \
     ghcr.io/vert-sh/vertd:latest
 ```
 
-> [!NOTE]
-> This setting only affects Intel and AMD GPUs on Linux, which use VA-API for hardware acceleration. It has no effect on NVIDIA GPUs, Apple GPUs, or other platforms.
+> [!IMPORTANT]
+> This setting only affects Intel and AMD GPUs on Linux, which use VA-API for hardware acceleration.
+> It has no effect on NVIDIA GPUs, Apple GPUs, or other platforms.
