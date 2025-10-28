@@ -11,6 +11,9 @@ This file covers how to set up `vertd` using Docker.
   - [Intel and AMD GPUs](#intel-and-amd-gpus-1)
   - [NVIDIA GPUs](#nvidia-gpus-1)
 - [Manual GPU selection](#manual-gpu-selection)
+- [CPU-only mode](#cpu-only-mode)
+  - [Automatic CPU fallback](#automatic-cpu-fallback)
+- [VA-API device path configuration](#va-api-device-path-configuration)
 
 > [!CAUTION]
 > Docker Desktop on macOS and Windows is unsupported.

@@ -17,6 +17,10 @@ This file covers how to get started with `vertd`.
 - [Manual GPU selection](#manual-gpu-selection)
   - [CLI arguments](#cli-arguments)
   - [Environment variable](#environment-variable)
+  - [Automatic CPU fallback](#automatic-cpu-fallback)
+- [VA-API device path configuration](#va-api-device-path-configuration)
+  - [CLI arguments](#cli-arguments-1)
+  - [Environment variable](#environment-variable-1)
 
 ## Installing dependencies
 
