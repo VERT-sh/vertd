@@ -12,18 +12,18 @@ WORKDIR /app
 
 ARG DEBIAN_FRONTEND="noninteractive"
 
-ENV XDG_RUNTIME_DIR=/tmp
+ENV XDG_RUNTIME_DIR="/tmp"
 ENV NVIDIA_VISIBLE_DEVICES="all"
 ENV NVIDIA_DRIVER_CAPABILITIES="all"
 
 COPY --from=builder /build/target/release/vertd ./vertd
 
 # https://github.com/NVIDIA/nvidia-container-toolkit/issues/140#issuecomment-1927273909
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && \
+    apt-get install -y \
     curl \
     ffmpeg \
     mesa-va-drivers \
-    intel-media-va-driver \
     libglvnd0 \
     libgl1 \
     libglx0 \
@@ -31,7 +31,10 @@ RUN apt-get update && apt-get install -y \
     libgles2  \
     libxcb1-dev \
     vulkan-tools \
-    mesa-utils
+    mesa-utils && \
+    if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+        apt-get install -y intel-media-va-driver; \
+    fi
 
 RUN rm -rf \
     /tmp/* \
