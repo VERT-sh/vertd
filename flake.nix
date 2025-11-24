@@ -58,7 +58,11 @@
           // {
             inherit cargoArtifacts;
 
-            nativeBuildInputs = [ pkgs.makeWrapper ];
+            nativeBuildInputs = [
+              pkgs.makeWrapper
+              pkgs.pkg-config
+              pkgs.openssl
+            ];
 
             postFixup = ''
               wrapProgram $out/bin/vertd --prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath [ pkgs.libGL ]}"
@@ -76,25 +80,28 @@
         );
       in
       {
-        packages =
-          {
-            default = vertd;
-          }
-          // lib.optionalAttrs (!pkgs.stdenv.isDarwin) {
-            vertd-llvm-coverage = craneLibLLvmTools.cargoLlvmCov (
-              commonArgs
-              // {
-                inherit cargoArtifacts;
-              }
-            );
-          };
+        packages = {
+          default = vertd;
+        }
+        // lib.optionalAttrs (!pkgs.stdenv.isDarwin) {
+          vertd-llvm-coverage = craneLibLLvmTools.cargoLlvmCov (
+            commonArgs
+            // {
+              inherit cargoArtifacts;
+            }
+          );
+        };
 
         apps.default = flake-utils.lib.mkApp {
           drv = vertd;
         };
 
-        devShells.default = craneLib.devShell { };
-
+        devShells.default = craneLib.devShell {
+          packages = [
+            pkgs.pkg-config
+            pkgs.openssl
+          ];
+        };
       }
     ))
     // {
