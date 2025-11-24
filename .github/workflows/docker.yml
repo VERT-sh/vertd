@@ -7,11 +7,17 @@ on:
     paths:
       - "src/**"
       - "Dockerfile"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".dockerignore"
   pull_request:
     branches: ["main"]
     paths:
       - "src/**"
       - "Dockerfile"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".dockerignore"
   workflow_dispatch:
 
 jobs:

@@ -8,8 +8,19 @@ name: Build and Release
 
 on:
   push:
-    branches:
-      - main
+    branches: ["main"]
+    tags: ["v*"]
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
 
 jobs:
   build:
