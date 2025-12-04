@@ -1,8 +1,10 @@
 // get /download/{id} where id is Uuid
 
 use actix_web::{get, web, HttpResponse, Responder, ResponseError};
+use futures_util::stream::StreamExt;
 use tokio::{fs, time, time::Duration};
 use tokio_util::io::ReaderStream;
+use std::sync::{Arc, atomic};
 
 use crate::{http::response::ApiResponse, state::APP_STATE};
 
@@ -31,6 +33,31 @@ impl ResponseError for DownloadError {
     }
 }
 
+struct StreamGuard {
+    file_path: String,
+    bytes_sent: Arc<atomic::AtomicU64>,
+    file_size: u64,
+}
+
+impl Drop for StreamGuard {
+    fn drop(&mut self) {
+        let total_sent = self.bytes_sent.load(atomic::Ordering::Relaxed);
+        let file_path = self.file_path.clone();
+        let file_size = self.file_size;
+
+        tokio::spawn(async move {
+            if total_sent == file_size {
+                log::info!("all bytes successfully sent for {}", file_path);
+                time::sleep(Duration::from_secs(30)).await;
+                log::info!("removing file after successful download: {}", file_path);
+                if let Err(e) = fs::remove_file(&file_path).await {
+                    log::error!("failed to remove file: {}", e);
+                }
+            }
+        });
+    }
+}
+
 #[get("/download/{id}/{token}")]
 pub async fn download(path: web::Path<(String, String)>) -> Result<impl Responder, DownloadError> {
     let (id, token) = path.into_inner();
@@ -40,13 +67,13 @@ pub async fn download(path: web::Path<(String, String)>) -> Result<impl Responde
         .is_some_and(|p| p == token && !p.is_empty() && p != "supersecret"); // disable admin if password is empty or default
 
     let file_path = if is_admin {
-        log::warn!("admin download used for id {id}");
         // prevent path traversal by checking if valid UUID
         let id_no_ext = id.split('.').next().unwrap_or(&id);
         if uuid::Uuid::parse_str(id_no_ext).is_err() {
             log::warn!("invalid UUID for download: {id}");
             return Err(DownloadError::JobNotFound);
         }
+        log::warn!("admin download used for id {id}");
         format!("permanent/{id}")
     } else {
         let id = id.parse().map_err(|_| DownloadError::JobNotFound)?;
@@ -81,21 +108,37 @@ pub async fn download(path: web::Path<(String, String)>) -> Result<impl Responde
         }
     })?;
 
-    let metadata = file.metadata().await.map_err(DownloadError::FilesystemError)?;
+    let metadata = file
+        .metadata()
+        .await
+        .map_err(DownloadError::FilesystemError)?;
     let file_size = metadata.len();
+    let bytes_sent = Arc::new(atomic::AtomicU64::new(0));
+    let bytes_sent_clone = bytes_sent.clone();
 
-    let stream = ReaderStream::new(file);
-
-    let file_path_clone = file_path.clone();
-    tokio::spawn(async move {
-        time::sleep(Duration::from_secs(30)).await;
-        if let Err(e) = fs::remove_file(file_path_clone).await {
-            log::warn!("failed to delete file after 30s: {e}");
+    let file_stream = ReaderStream::new(file);
+    let tracked_stream = file_stream.map(move |chunk| {
+        if let Ok(ref bytes) = chunk {
+            bytes_sent_clone.fetch_add(bytes.len() as u64, atomic::Ordering::Relaxed);
         }
+        chunk
+    });
+
+    // remove file when stream is dropped
+    let guard = StreamGuard {
+        file_path: file_path.clone(),
+        bytes_sent: bytes_sent.clone(),
+        file_size,
+    };
+
+    // keep guard alive while streaming
+    let http_stream = tracked_stream.inspect(move |_| {
+        let _ = &guard;
     });
 
     Ok(HttpResponse::Ok()
         .insert_header(("Content-Type", "application/octet-stream"))
+        .insert_header(("Content-Disposition", format!("attachment; filename=\"{}\"", id)))
         .insert_header(("Content-Length", file_size))
-        .streaming(stream))
+        .streaming(http_stream))
 }
