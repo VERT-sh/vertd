@@ -40,7 +40,13 @@ pub async fn download(path: web::Path<(String, String)>) -> Result<impl Responde
 
     let file_path = if is_admin {
         log::warn!("admin download used for id {id}");
-        format!("permanent/{id}") // this would be vulnerable to path traversal but it's behind a password so who cares
+        // prevent path traversal by checking if valid UUID
+        let id_no_ext = id.split('.').next().unwrap_or(&id);
+        if uuid::Uuid::parse_str(id_no_ext).is_err() {
+            log::warn!("invalid UUID for download: {id}");
+            return Err(DownloadError::JobNotFound);
+        }
+        format!("permanent/{id}")
     } else {
         let id = id.parse().map_err(|_| DownloadError::JobNotFound)?;
         let app_state = APP_STATE.lock().await;
