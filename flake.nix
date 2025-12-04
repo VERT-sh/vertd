@@ -44,6 +44,7 @@
             "cargo"
             "llvm-tools"
             "rustc"
+            "rustfmt"
           ]
         );
 

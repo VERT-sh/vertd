@@ -9,3 +9,4 @@ ffprobe
 input.mp4
 .env
 result
+.direnv
