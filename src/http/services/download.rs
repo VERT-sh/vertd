@@ -1,7 +1,7 @@
 // get /download/{id} where id is Uuid
 
 use actix_web::{get, web, HttpResponse, Responder, ResponseError};
-use tokio::fs;
+use tokio::{fs, time, time::Duration};
 
 use crate::{http::response::ApiResponse, state::APP_STATE};
 
@@ -74,16 +74,16 @@ pub async fn download(path: web::Path<(String, String)>) -> Result<impl Responde
         }
     })?;
 
-    let mime = mime_guess::from_path(&file_path)
-        .first_or_octet_stream()
-        .to_string();
-
-    fs::remove_file(file_path)
-        .await
-        .map_err(DownloadError::FilesystemError)?;
+    let file_path_clone = file_path.clone();
+    tokio::spawn(async move {
+        time::sleep(Duration::from_secs(30)).await;
+        if let Err(e) = fs::remove_file(file_path_clone).await {
+            log::warn!("failed to delete file after 30s: {e}");
+        }
+    });
 
     Ok(HttpResponse::Ok()
-        .insert_header(("Content-Type", mime))
+        .insert_header(("Content-Type", "application/octet-stream"))
         .insert_header(("Content-Length", bytes.len()))
         .body(bytes))
 }

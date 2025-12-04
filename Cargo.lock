@@ -2692,7 +2692,6 @@ dependencies = [
  "hex",
  "lazy_static",
  "log",
- "mime_guess",
  "rand 0.9.0",
  "rbtag",
  "serde",
