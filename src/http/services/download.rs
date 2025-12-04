@@ -2,6 +2,7 @@
 
 use actix_web::{get, web, HttpResponse, Responder, ResponseError};
 use tokio::{fs, time, time::Duration};
+use tokio_util::io::ReaderStream;
 
 use crate::{http::response::ApiResponse, state::APP_STATE};
 
@@ -72,13 +73,18 @@ pub async fn download(path: web::Path<(String, String)>) -> Result<impl Responde
         file_path
     };
 
-    let bytes = fs::read(&file_path).await.map_err(|e| {
+    let file = fs::File::open(&file_path).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             DownloadError::JobNotFound
         } else {
             DownloadError::FilesystemError(e)
         }
     })?;
+
+    let metadata = file.metadata().await.map_err(DownloadError::FilesystemError)?;
+    let file_size = metadata.len();
+
+    let stream = ReaderStream::new(file);
 
     let file_path_clone = file_path.clone();
     tokio::spawn(async move {
@@ -90,6 +96,6 @@ pub async fn download(path: web::Path<(String, String)>) -> Result<impl Responde
 
     Ok(HttpResponse::Ok()
         .insert_header(("Content-Type", "application/octet-stream"))
-        .insert_header(("Content-Length", bytes.len()))
-        .body(bytes))
+        .insert_header(("Content-Length", file_size))
+        .streaming(stream))
 }
