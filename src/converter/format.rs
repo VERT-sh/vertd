@@ -78,6 +78,7 @@ impl Conversion {
         gpu: &ConverterGPU,
         bitrate: u64,
         fps: u32,
+        job: &super::job::Job,
     ) -> anyhow::Result<Vec<String>> {
         let conversion_opts: Vec<String> = match self.to {
             ConverterFormat::MP4
@@ -95,14 +96,40 @@ impl Conversion {
                 let encoder = self
                     .accelerated_or_default_codec(gpu, &["h264"], "libx264")
                     .await;
-                vec![
-                    "-c:v".to_string(),
-                    encoder,
+
+                let mut args = vec!["-c:v".to_string(), encoder.clone()];
+
+                let (width, height) = job.resolution().await?;
+                let is_4k = width >= 3840 || height >= 2160;
+                let pix_fmt = job.pix_fmt().await?;
+
+                // convert to 8bit if 10bit (h264_nvenc does not support 10bit)
+                // could probably use h265 instead?
+                let is_10bit = pix_fmt.contains("10le") || pix_fmt.contains("10be");
+                if is_10bit {
+                    args.extend(["-pix_fmt".to_string(), "yuv420p".to_string()]);
+                }
+
+                if is_4k {
+                    args.extend(["-level:v".to_string(), "5.2".to_string()]);
+                    if fps > 120 {
+                        args.extend(["-r".to_string(), "120".to_string()]);
+                    }
+                }
+
+                // scale to 160:-1 if width is less than 160
+                if width < 160 {
+                    args.extend(["-vf".to_string(), "scale=160:-1".to_string()]);
+                }
+
+                args.extend([
                     "-c:a".to_string(),
                     "aac".to_string(),
                     "-strict".to_string(),
                     "experimental".to_string(),
-                ]
+                ]);
+
+                args
             }
 
             ConverterFormat::GIF => {
@@ -225,6 +252,8 @@ impl Conversion {
                 "25".to_string(),
                 "-block_size".to_string(),
                 "882".to_string(),
+                "-strict".to_string(),
+                "-1".to_string(),
             ],
         };
 

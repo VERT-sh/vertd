@@ -167,6 +167,115 @@ impl Job {
         let (bitrate, fps) = (self.bitrate().await?, self.fps().await?);
         Ok((bitrate, fps))
     }
+
+    pub async fn resolution(&self) -> anyhow::Result<(u32, u32)> {
+        let path = format!("input/{}.{}", self.id, self.from);
+
+        let output = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=s=x:p=0",
+                &path,
+            ])
+            .output()
+            .await?;
+
+        let res_str = String::from_utf8(output.stdout)?;
+        let mut parts = res_str.trim().split('x');
+        let width = parts
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("failed to get width"))?
+            .parse::<u32>()?;
+        let height = parts
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("failed to get height"))?
+            .parse::<u32>()?;
+
+        Ok((width, height))
+    }
+
+    pub async fn pix_fmt(&self) -> anyhow::Result<String> {
+        let path = format!("input/{}.{}", self.id, self.from);
+
+        let output = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=pix_fmt",
+                "-of",
+                "default=nokey=1:noprint_wrappers=1",
+                &path,
+            ])
+            .output()
+            .await?;
+
+        let pix_fmt = String::from_utf8(output.stdout)?
+            .lines()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("failed to get pixel format"))?
+            .to_string();
+
+        Ok(pix_fmt)
+    }
+
+    pub async fn codecs(&self) -> anyhow::Result<(String, String)> {
+        let path = format!("input/{}.{}", self.id, self.from);
+
+        // Video codec
+        let output = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name",
+                "-of",
+                "default=nokey=1:noprint_wrappers=1",
+                &path,
+            ])
+            .output()
+            .await?;
+
+        let video_codec = String::from_utf8(output.stdout)?
+            .lines()
+            .next()
+            .unwrap_or("none")
+            .to_string();
+
+        // Audio codec
+        let output = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=codec_name",
+                "-of",
+                "default=nokey=1:noprint_wrappers=1",
+                &path,
+            ])
+            .output()
+            .await?;
+
+        let audio_codec = String::from_utf8(output.stdout)?
+            .lines()
+            .next()
+            .unwrap_or("none")
+            .to_string();
+
+        Ok((video_codec, audio_codec))
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

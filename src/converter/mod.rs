@@ -53,7 +53,7 @@ impl Converter {
         let (bitrate, fps) = job.bitrate_and_fps().await?;
         let args = self
             .conversion
-            .to_args(&self.speed, gpu, bitrate, fps)
+            .to_args(&self.speed, gpu, bitrate, fps, job)
             .await?;
         let args = args.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
         let args = args.as_slice();
