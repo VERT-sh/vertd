@@ -80,6 +80,23 @@ impl Converter {
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
 
+        // if video is more than 4k on nvenc, remove -hwaccel cuda to avoid "Video width 7680 not within range from 48 to 4096"
+        // error from the h264_nvenc *decoder*, guh
+        let command = if matches!(gpu, gpu::ConverterGPU::NVIDIA) {
+            let (width, height) = job.resolution().await?;
+            if width > 3840 || height > 2160 {
+                command
+                    .iter()
+                    .filter(|s| *s != "-hwaccel" && *s != "cuda")
+                    .cloned()
+                    .collect()
+            } else {
+                command
+            }
+        } else {
+            command
+        };
+
         info!("running 'ffmpeg {}'", command.join(" "));
 
         let mut process = Command::new("ffmpeg")

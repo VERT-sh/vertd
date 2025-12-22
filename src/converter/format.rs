@@ -72,6 +72,65 @@ impl Conversion {
         default.to_string()
     }
 
+    // workarounds for NVENC for "weirder" videos
+    async fn nvenc_args(
+        &self,
+        gpu: &ConverterGPU,
+        job: &super::job::Job,
+        fps: u32,
+    ) -> anyhow::Result<Vec<String>> {
+        let (width, height) = job.resolution().await?;
+        let is_4k = width == 3840 || height == 2160;
+        let is_above_4k = width > 3840 || height > 2160;
+        let pix_fmt = job.pix_fmt().await?;
+
+        // choose codec
+        // prefer original codec, force h265 if original is h264 and (10bit or 4k)
+        let codecs = job.codecs().await?;
+        let has_h265 = codecs.0.to_lowercase().contains("hevc");
+        let has_h264 = codecs.0.to_lowercase().contains("h264");
+        let is_10bit = pix_fmt.contains("10le") || pix_fmt.contains("10be");
+        let (codec_order, default) = if has_h265 || (has_h264 && (is_10bit || is_4k || is_above_4k))
+        {
+            (&["hevc"][..], "libx265")
+        } else if has_h264 {
+            (&["h264"][..], "libx264")
+        } else {
+            (&["h264"][..], "libx264")
+        };
+
+        // do we still really need to check for codec support? this function is only called if gpu is nvidia
+        let encoder = self
+            .accelerated_or_default_codec(gpu, codec_order, default)
+            .await;
+
+        let mut args = vec!["-c:v".to_string(), encoder.clone()];
+
+        // convert to 8 bit if 10 bit on h264_nvenc
+        if is_10bit && encoder == "h264_nvenc" {
+            args.extend(["-pix_fmt".to_string(), "yuv420p".to_string()]);
+        }
+
+        if is_above_4k {
+            // older gpus might not like 6.2
+            args.extend(["-level:v".to_string(), "6.2".to_string()]);
+            if fps > 60 {
+                args.extend(["-r".to_string(), "60".to_string()]);
+            }
+        } else if is_4k {
+            args.extend(["-level:v".to_string(), "5.2".to_string()]);
+            if fps > 120 {
+                args.extend(["-r".to_string(), "120".to_string()]);
+            }
+        }
+
+        // scale to 160:-1 if width is less than 160
+        if width < 160 {
+            args.extend(["-vf".to_string(), "scale=160:-1".to_string()]);
+        }
+        Ok(args)
+    }
+
     pub async fn to_args(
         &self,
         speed: &ConversionSpeed,
@@ -93,52 +152,30 @@ impl Conversion {
             | ConverterFormat::ThreeGP
             | ConverterFormat::ThreeG2
             | ConverterFormat::H264 => {
-                let encoder = self
-                    .accelerated_or_default_codec(gpu, &["h264"], "libx264")
-                    .await;
-
-                let mut args = vec!["-c:v".to_string(), encoder.clone()];
-
-                let (width, height) = job.resolution().await?;
-                let is_4k = width >= 3840 || height >= 2160;
-                let pix_fmt = job.pix_fmt().await?;
-
-                // convert to 8bit if 10bit (h264_nvenc does not support 10bit)
-                // could probably use h265 instead?
-                let is_10bit = pix_fmt.contains("10le") || pix_fmt.contains("10be");
-                if is_10bit {
-                    args.extend(["-pix_fmt".to_string(), "yuv420p".to_string()]);
+                if matches!(gpu, ConverterGPU::NVIDIA) {
+                    self.nvenc_args(gpu, job, fps).await?
+                } else {
+                    let encoder = self
+                        .accelerated_or_default_codec(gpu, &["h264"], "libx264")
+                        .await;
+                    vec![
+                        "-c:v".to_string(),
+                        encoder,
+                        "-c:a".to_string(),
+                        "aac".to_string(),
+                        "-strict".to_string(),
+                        "experimental".to_string(),
+                    ]
                 }
-
-                if is_4k {
-                    args.extend(["-level:v".to_string(), "5.2".to_string()]);
-                    if fps > 120 {
-                        args.extend(["-r".to_string(), "120".to_string()]);
-                    }
-                }
-
-                // scale to 160:-1 if width is less than 160
-                if width < 160 {
-                    args.extend(["-vf".to_string(), "scale=160:-1".to_string()]);
-                }
-
-                args.extend([
-                    "-c:a".to_string(),
-                    "aac".to_string(),
-                    "-strict".to_string(),
-                    "experimental".to_string(),
-                ]);
-
-                args
             }
 
             ConverterFormat::GIF => {
                 vec![
-                   "-filter_complex".to_string(), 
-                   format!(
-                    "fps={},scale=800:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse=dither=bayer",
-                    fps.min(24)
-                   )
+                    "-filter_complex".to_string(), 
+                    format!(
+                        "fps={},scale=800:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse=dither=bayer",
+                        fps.min(24)
+                    )
                 ]
             }
 
