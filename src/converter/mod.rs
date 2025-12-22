@@ -51,9 +51,10 @@ impl Converter {
         // let fps = job.fps().await?;
         // the above but we run in parallel
         let (bitrate, fps) = job.bitrate_and_fps().await?;
+        let (width, height) = job.resolution().await?;
         let args = self
             .conversion
-            .to_args(&self.speed, gpu, bitrate, fps, job)
+            .to_args(&self.speed, gpu, (width, height), bitrate, fps, job)
             .await?;
         let args = args.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
         let args = args.as_slice();
@@ -79,6 +80,23 @@ impl Converter {
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
+
+        // if video is more than 4k on nvenc, remove -hwaccel cuda to avoid "Video width 7680 not within range from 48 to 4096"
+        // error from the h264_nvenc *decoder*, guh
+        let command = if matches!(gpu, gpu::ConverterGPU::NVIDIA) {
+            let (width, height) = job.resolution().await?;
+            if width > 3840 || height > 2160 {
+                command
+                    .iter()
+                    .filter(|s| *s != "-hwaccel" && *s != "cuda")
+                    .cloned()
+                    .collect()
+            } else {
+                command
+            }
+        } else {
+            command
+        };
 
         info!("running 'ffmpeg {}'", command.join(" "));
 

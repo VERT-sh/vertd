@@ -138,7 +138,6 @@ impl ConversionSpeed {
 
         if *to != ConverterFormat::GIF {
             args.push("-b:v".to_string());
-            let bitrate = (bitrate as f64 * self.to_bitrate_mul()) as u64;
             args.push(bitrate.to_string());
         }
 
