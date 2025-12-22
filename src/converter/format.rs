@@ -76,10 +76,11 @@ impl Conversion {
     async fn nvenc_args(
         &self,
         gpu: &ConverterGPU,
-        job: &super::job::Job,
+        resolution: (u32, u32),
         fps: u32,
+        job: &super::job::Job,
     ) -> anyhow::Result<Vec<String>> {
-        let (width, height) = job.resolution().await?;
+        let (width, height) = resolution;
         let is_4k = width == 3840 || height == 2160;
         let is_above_4k = width > 3840 || height > 2160;
         let pix_fmt = job.pix_fmt().await?;
@@ -111,17 +112,8 @@ impl Conversion {
             args.extend(["-pix_fmt".to_string(), "yuv420p".to_string()]);
         }
 
-        if is_above_4k {
-            // older gpus might not like 6.2
-            args.extend(["-level:v".to_string(), "6.2".to_string()]);
-            if fps > 60 {
-                args.extend(["-r".to_string(), "60".to_string()]);
-            }
-        } else if is_4k {
-            args.extend(["-level:v".to_string(), "5.2".to_string()]);
-            if fps > 120 {
-                args.extend(["-r".to_string(), "120".to_string()]);
-            }
+        if fps > 240 {
+            args.extend(["-r".to_string(), "240".to_string()]);
         }
 
         // scale to 160:-1 if width is less than 160
@@ -135,6 +127,7 @@ impl Conversion {
         &self,
         speed: &ConversionSpeed,
         gpu: &ConverterGPU,
+        resolution: (u32, u32),
         bitrate: u64,
         fps: u32,
         job: &super::job::Job,
@@ -153,7 +146,7 @@ impl Conversion {
             | ConverterFormat::ThreeG2
             | ConverterFormat::H264 => {
                 if matches!(gpu, ConverterGPU::NVIDIA) {
-                    self.nvenc_args(gpu, job, fps).await?
+                    self.nvenc_args(gpu, resolution, fps, job).await?
                 } else {
                     let encoder = self
                         .accelerated_or_default_codec(gpu, &["h264"], "libx264")

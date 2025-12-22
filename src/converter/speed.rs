@@ -138,16 +138,6 @@ impl ConversionSpeed {
 
         if *to != ConverterFormat::GIF {
             args.push("-b:v".to_string());
-
-            let mut bitrate = (bitrate as f64 * self.to_bitrate_mul()) as u64;
-
-            // should probably depend on the codec being used, maybe resolution as well
-            // basically same as bitrate() in job.rs
-            let max_bitrate: u64 = 100_000_000; // 100 Mbps
-            if bitrate > max_bitrate {
-                bitrate = max_bitrate; 
-            }
-
             args.push(bitrate.to_string());
         }
 

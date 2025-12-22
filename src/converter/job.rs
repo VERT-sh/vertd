@@ -3,9 +3,6 @@ use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 use uuid::Uuid;
 
-const DEFAULT_BITRATE: u64 = 4 * 1_000_000;
-const BITRATE_MULTIPLIER: f64 = 2.5;
-
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Job {
@@ -52,9 +49,7 @@ impl Job {
         self.state == JobState::Processing
     }
 
-    // TODO: scale based on resolution
     pub async fn bitrate(&mut self) -> anyhow::Result<u64> {
-        // Ok(DEFAULT_BITRATE)
         if let Some(bitrate) = self.bitrate {
             return Ok(bitrate);
         }
@@ -74,14 +69,24 @@ impl Job {
             .output()
             .await?;
 
-        let bitrate = String::from_utf8(output.stdout)?;
-        let bitrate = match bitrate.trim().parse::<u64>() {
-            Ok(bitrate) => bitrate,
-            Err(_) => DEFAULT_BITRATE,
+        // use detected bitrate
+        let bitrate = String::from_utf8(output.stdout)?.trim().parse::<u64>().ok();
+        if let Some(bitrate_value) = bitrate {
+            return Ok(bitrate_value);
+        }
+
+        // else check resolution and use default bitrate (based on resolution)
+        let (width, height) = self.resolution().await?;
+        let default_bitrate = match (width, height) {
+            (w, h) if w >= 3840 || h >= 2160 => 30_000_000, // 4K - 30 Mbps
+            (w, h) if w >= 2560 || h >= 1440 => 14_000_000, // 2K - 14 Mbps
+            (w, h) if w >= 1920 || h >= 1080 => 7_000_000,  // 1080p - 7 Mbps
+            (w, h) if w >= 1280 || h >= 720 => 4_000_000,   // 720p - 4 Mbps
+            _ => 1_500_000,                                 // SD - 1.5 Mbps
         };
 
-        self.bitrate = Some(bitrate);
-        Ok(((bitrate as f64) * BITRATE_MULTIPLIER) as u64)
+        self.bitrate = Some(default_bitrate);
+        Ok(default_bitrate)
     }
 
     pub async fn total_frames(&mut self) -> anyhow::Result<u64> {

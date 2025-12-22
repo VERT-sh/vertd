@@ -51,9 +51,10 @@ impl Converter {
         // let fps = job.fps().await?;
         // the above but we run in parallel
         let (bitrate, fps) = job.bitrate_and_fps().await?;
+        let (width, height) = job.resolution().await?;
         let args = self
             .conversion
-            .to_args(&self.speed, gpu, bitrate, fps, job)
+            .to_args(&self.speed, gpu, (width, height), bitrate, fps, job)
             .await?;
         let args = args.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
         let args = args.as_slice();
