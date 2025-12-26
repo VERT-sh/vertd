@@ -8,6 +8,7 @@ services:
       - WEBHOOK_PINGS=${WEBHOOK_PINGS}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - PUBLIC_URL=${PUBLIC_URL}
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
     ports:
       - "${PORT:-24153}:24153"
 
