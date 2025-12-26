@@ -84,7 +84,7 @@ pub async fn start_http() -> anyhow::Result<()> {
     if !port.chars().all(char::is_numeric) {
         anyhow::bail!("PORT must be a number");
     }
-    let ip = format!("0.0.0.0:{port}");
+    let ip = format!("0.0.0.0:{}", port);
     info!("http server listening on {}", ip);
     server.bind(ip)?.run().await?;
     Ok(())
