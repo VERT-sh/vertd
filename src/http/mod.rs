@@ -8,7 +8,7 @@ use crate::http::services::keep::keep;
 mod response;
 mod services;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 enum CorsConfig {
     Any,
     Specific(Vec<String>),
