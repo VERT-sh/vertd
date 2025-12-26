@@ -64,14 +64,7 @@ pub async fn start_http() -> anyhow::Result<()> {
         }
     }
 
-    let port = std::env::var("PORT").unwrap_or_else(|_| "24153".to_string());
-    if !port.chars().all(char::is_numeric) {
-        anyhow::bail!("PORT must be a number");
-    }
-    let ip = format!("0.0.0.0:{port}");
-    info!("http server starting on {}", ip);
-
-    HttpServer::new({
+    let server = HttpServer::new({
         let cors_config = cors_config.clone(); // moved into the closure
         move || {
             let cors = build_cors(&cors_config);
@@ -85,10 +78,14 @@ pub async fn start_http() -> anyhow::Result<()> {
                     .service(keep),
             )
         }
-    })
-    .bind(ip)?
-    .run()
-    .await?;
+    });
 
+    let port = std::env::var("PORT").unwrap_or_else(|_| "24153".to_string());
+    if !port.chars().all(char::is_numeric) {
+        anyhow::bail!("PORT must be a number");
+    }
+    let ip = format!("0.0.0.0:{port}");
+    info!("http server listening on {}", ip);
+    server.bind(ip)?.run().await?;
     Ok(())
 }
