@@ -65,7 +65,7 @@ pub async fn start_http() -> anyhow::Result<()> {
     }
 
     let server = HttpServer::new({
-        let cors_config = cors_config.clone(); // moved into the closure
+        let cors_config = cors_config.clone();
         move || {
             let cors = build_cors(&cors_config);
 
