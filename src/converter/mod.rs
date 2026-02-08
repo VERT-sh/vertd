@@ -68,7 +68,7 @@ impl Converter {
         };
 
         let command = &[
-            &["-hide_banner", "-loglevel", "error", "-progress", "pipe:1"][..],
+            &["-y", "-hide_banner", "-loglevel", "error", "-progress", "pipe:1"][..],
             &gpu_args_refs[..],
             &["-i", &input_filename],
             args,

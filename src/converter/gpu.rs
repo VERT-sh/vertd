@@ -4,7 +4,7 @@ use std::fmt::{self, Display, Formatter};
 use tokio::process::Command;
 use wgpu::Instance;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum ConverterGPU {
     AMD,
     Intel,

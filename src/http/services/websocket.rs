@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::{
     converter::{
         format::ConverterFormat,
+        gpu::ConverterGPU,
         job::{JobState, ProgressUpdate},
         speed::ConversionSpeed,
         Converter,
@@ -141,7 +142,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     continue;
                 };
 
-                let converter = Converter::new(from, to, speed, keep_metadata);
+                let converter = Converter::new(from, to, speed.clone(), keep_metadata);
 
                 let (gpu, vaapi_device_path) = {
                     let app_state = APP_STATE.lock().await;
@@ -176,146 +177,188 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     }
                 };
 
-                // store process in case user wants to cancel
-                {
-                    let mut app_state = APP_STATE.lock().await;
-                    app_state.active_processes.insert(job_id, process);
-                }
-
-                let mut logs = Vec::new();
+                let mut logs = Vec::new(); // probably should store GPU and CPU logs - send GPU if cpu needed, send both if both fail
                 let mut job_cancelled = false;
+                let mut current_gpu = gpu;
+                let mut process_opt = Some(process);
+                'conversion: loop {
+                    // store process in case user wants to cancel
+                    if let Some(proc) = process_opt.take() {
+                        let mut app_state = APP_STATE.lock().await;
+                        app_state.active_processes.insert(job_id, proc);
+                    }
 
-                // send progress updates and listen for cancellation
-                loop {
-                    tokio::select! {
-                        update = rx.recv() => {
-                            match update {
-                                Some(ProgressUpdate::Error(err)) => {
-                                    logs.push(err);
+                    let mut conversion_finished = false;
+
+                    // send progress updates and listen for cancellation
+                    loop {
+                        tokio::select! {
+                            update = rx.recv() => {
+                                match update {
+                                    Some(ProgressUpdate::Error(err)) => {
+                                        logs.push(err);
+                                    }
+                                    Some(progress) => {
+                                        let message: String = Message::ProgressUpdate(progress).into();
+                                        session.text(message).await.unwrap();
+                                    }
+                                    None => {
+                                        // conversion finished
+                                        conversion_finished = true;
+                                        break;
+                                    }
                                 }
-                                Some(progress) => {
-                                    let message: String = Message::ProgressUpdate(progress).into();
-                                    session.text(message).await.unwrap();
-                                }
-                                None => {
-                                    // conversion finished
+                            }
+
+                            new_message = stream.next() => {
+                                if let Some(Ok(AggregatedMessage::Text(text))) = new_message {
+                                    if let Ok(parsed_message) = serde_json::from_str::<Message>(&text) {
+                                        if let Message::CancelJob { token: cancel_token, job_id: cancel_job_id } = parsed_message {
+                                            if cancel_job_id == job_id && cancel_token == token {
+                                                log::info!("cancelling job {}", job_id);
+
+                                                let mut app_state = APP_STATE.lock().await;
+                                                if let Some(mut process) = app_state.active_processes.remove(&job_id) {
+                                                    if let Err(e) = process.kill().await {
+                                                        log::error!("failed to kill process for job {}: {}", job_id, e);
+                                                    } else {
+                                                        log::info!("killed process for job {}", job_id);
+                                                        job_cancelled = true;
+                                                    }
+                                                }
+
+                                                if let Some(job) = app_state.jobs.get_mut(&job_id) {
+                                                    job.state = JobState::Completed;
+                                                }
+                                                drop(app_state);
+
+                                                let message: String = Message::JobCancelled { job_id }.into();
+                                                session.text(message).await.unwrap();
+
+                                                break;
+                                            } else {
+                                                let message: String = Message::Error {
+                                                    message: "invalid token or job id for cancellation".to_string(),
+                                                }
+                                                .into();
+                                                session.text(message).await.unwrap();
+                                            }
+                                        }
+                                    }
+                                } else if new_message.is_none() {
+                                    // ws closed
                                     break;
                                 }
                             }
                         }
+                    }
 
-                        new_message = stream.next() => {
-                            if let Some(Ok(AggregatedMessage::Text(text))) = new_message {
-                                if let Ok(parsed_message) = serde_json::from_str::<Message>(&text) {
-                                    if let Message::CancelJob { token: cancel_token, job_id: cancel_job_id } = parsed_message {
-                                        if cancel_job_id == job_id && cancel_token == token {
-                                            log::info!("cancelling job {}", job_id);
+                    if !conversion_finished {
+                        // ws closed or job cancelled, exit the outer loop
+                        break 'conversion;
+                    }
 
-                                            let mut app_state = APP_STATE.lock().await;
-                                            if let Some(mut process) = app_state.active_processes.remove(&job_id) {
-                                                if let Err(e) = process.kill().await {
-                                                    log::error!("failed to kill process for job {}: {}", job_id, e);
-                                                } else {
-                                                    log::info!("killed process for job {}", job_id);
-                                                    job_cancelled = true;
-                                                }
-                                            }
+                    // clean up
+                    {
+                        let mut app_state = APP_STATE.lock().await;
+                        if let Some(job) = app_state.jobs.get_mut(&job_id) {
+                            job.state = JobState::Completed;
+                        }
 
-                                            if let Some(job) = app_state.jobs.get_mut(&job_id) {
-                                                job.state = JobState::Completed;
-                                            }
-                                            drop(app_state);
+                        if !job_cancelled {
+                            // clean process only if not cancelled
+                            app_state.active_processes.remove(&job_id);
+                        } else {
+                            // clean up job if cancelled
+                            app_state.jobs.remove(&job_id);
+                            drop(app_state);
 
-                                            let message: String = Message::JobCancelled { job_id }.into();
-                                            session.text(message).await.unwrap();
-
-                                            break;
-                                        } else {
-                                            let message: String = Message::Error {
-                                                message: "invalid token or job id for cancellation".to_string(),
-                                            }
-                                            .into();
-                                            session.text(message).await.unwrap();
-                                        }
-                                    }
+                            if let Err(e) =
+                                fs::remove_file(&format!("input/{}.{}", job.id, job.from)).await
+                            {
+                                if e.kind() != ErrorKind::NotFound {
+                                    log::error!(
+                                        "failed to remove input file after cancellation: {}",
+                                        e
+                                    );
                                 }
-                            } else if new_message.is_none() {
-                                // ws closed
-                                break;
                             }
+                            break 'conversion;
                         }
-                    }
-                }
 
-                {
-                    let mut app_state = APP_STATE.lock().await;
-                    if let Some(job) = app_state.jobs.get_mut(&job_id) {
-                        job.state = JobState::Completed;
-                    }
-
-                    if !job_cancelled {
-                        // clean process only if not cancelled
-                        app_state.active_processes.remove(&job_id);
-                    } else {
-                        // clean up job if cancelled
-                        app_state.jobs.remove(&job_id);
                         drop(app_state);
+                    }
 
-                        if let Err(e) =
-                            fs::remove_file(&format!("input/{}.{}", job.id, job.from)).await
-                        {
-                            if e.kind() != ErrorKind::NotFound {
-                                log::error!(
-                                    "failed to remove input file after cancellation: {}",
-                                    e
-                                );
+                    // check if output/{}.{} exists and isn't empty
+                    let is_empty = fs::metadata(&format!("output/{}.{}", job_id, to))
+                        .await
+                        .map(|m| m.len() == 0)
+                        .unwrap_or(true);
+
+                    if is_empty {
+                        // if GPU-related failure, try falling back to CPU/software conversion
+                        if current_gpu != ConverterGPU::CPU {
+                            log::info!("attempting CPU fallback for job {}", job_id);
+                            let converter = Converter::new(from, to, speed.clone(), keep_metadata);
+                            let (new_rx, new_process) = match converter
+                                .convert(&mut job, &ConverterGPU::CPU, None)
+                                .await
+                            {
+                                Ok((rx, process)) => (rx, process),
+                                Err(e) => {
+                                    let message: String = Message::Error {
+                                        message: format!("failed to convert with CPU fallback: {}", e),
+                                    }
+                                    .into();
+                                    session.text(message).await.unwrap();
+                                    continue;
+                                }
+                            };
+                            rx = new_rx;
+                            process_opt = Some(new_process);
+                            logs.clear();
+                            current_gpu = ConverterGPU::CPU;
+                            continue 'conversion;
+                        } else {
+                            // if already CPU (or CPU fallback failed), finally give up </3
+
+                            // hacky :/
+                            let mut app_state = APP_STATE.lock().await;
+                            if let Some(job) = app_state.jobs.get_mut(&job_id) {
+                                job.state = JobState::Failed;
                             }
+                            drop(app_state);
+                            log::error!("job {} failed", job_id);
+
+                            let error_message = if logs.is_empty() {
+                                "No error logs.".to_string()
+                            } else {
+                                logs.join("\n")
+                            };
+
+                            let message: String = Message::Error {
+                                message: error_message,
+                            }
+                            .into();
+                            session.text(message).await.unwrap();
+
+                            let from = job.from.clone();
+                            let to = to.to_string().to_string();
+
+                            tokio::spawn(async move {
+                                if let Err(e) =
+                                    handle_job_failure(job_id, from, to, logs.join("\n")).await
+                                {
+                                    log::error!("failed to handle job failure: {}", e);
+                                }
+                            });
                         }
-                        continue;
-                    }
-
-                    drop(app_state);
-                }
-
-                // check if output/{}.{} exists and isn't empty
-                let is_empty = fs::metadata(&format!("output/{}.{}", job_id, to))
-                    .await
-                    .map(|m| m.len() == 0)
-                    .unwrap_or(true);
-
-                if is_empty {
-                    // hacky :/
-                    let mut app_state = APP_STATE.lock().await;
-                    if let Some(job) = app_state.jobs.get_mut(&job_id) {
-                        job.state = JobState::Failed;
-                    }
-                    drop(app_state);
-                    log::error!("job {} failed", job_id);
-
-                    let error_message = if logs.is_empty() {
-                        "No error logs.".to_string()
                     } else {
-                        logs.join("\n")
-                    };
-
-                    let message: String = Message::Error {
-                        message: error_message,
+                        let message: String = Message::JobFinished { job_id }.into();
+                        session.text(message).await.unwrap();
                     }
-                    .into();
-                    session.text(message).await.unwrap();
 
-                    let from = job.from.clone();
-                    let to = to.to_string().to_string();
-
-                    tokio::spawn(async move {
-                        if let Err(e) = handle_job_failure(job_id, from, to, logs.join("\n")).await
-                        {
-                            log::error!("failed to handle job failure: {}", e);
-                        }
-                    });
-                } else {
-                    let message: String = Message::JobFinished { job_id }.into();
-                    session.text(message).await.unwrap();
+                    break 'conversion;
                 }
 
                 tokio::spawn(async move {

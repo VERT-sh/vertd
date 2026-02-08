@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{format::ConverterFormat, gpu::ConverterGPU};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum ConversionSpeed {
     UltraFast,
