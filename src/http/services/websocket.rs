@@ -177,7 +177,9 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     }
                 };
 
-                let mut logs = Vec::new(); // probably should store GPU and CPU logs - send GPU if cpu needed, send both if both fail
+                let mut logs = Vec::new();
+                let mut fallback_logs = Vec::new();
+                let mut is_fallback = false;
                 let mut job_cancelled = false;
                 let mut current_gpu = gpu;
                 let mut process_opt = Some(process);
@@ -196,7 +198,11 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                             update = rx.recv() => {
                                 match update {
                                     Some(ProgressUpdate::Error(err)) => {
-                                        logs.push(err);
+                                        if is_fallback {
+                                            fallback_logs.push(err);
+                                        } else {
+                                            logs.push(err)
+                                        }
                                     }
                                     Some(progress) => {
                                         let message: String = Message::ProgressUpdate(progress).into();
@@ -300,24 +306,25 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         if current_gpu != ConverterGPU::CPU {
                             log::info!("attempting CPU fallback for job {}", job_id);
                             let converter = Converter::new(from, to, speed.clone(), keep_metadata);
-                            let (new_rx, new_process) = match converter
-                                .convert(&mut job, &ConverterGPU::CPU, None)
-                                .await
-                            {
-                                Ok((rx, process)) => (rx, process),
-                                Err(e) => {
-                                    let message: String = Message::Error {
-                                        message: format!("failed to convert with CPU fallback: {}", e),
+                            let (new_rx, new_process) =
+                                match converter.convert(&mut job, &ConverterGPU::CPU, None).await {
+                                    Ok((rx, process)) => (rx, process),
+                                    Err(e) => {
+                                        let message: String = Message::Error {
+                                            message: format!(
+                                                "failed to convert with CPU fallback: {}",
+                                                e
+                                            ),
+                                        }
+                                        .into();
+                                        session.text(message).await.unwrap();
+                                        continue;
                                     }
-                                    .into();
-                                    session.text(message).await.unwrap();
-                                    continue;
-                                }
-                            };
+                                };
                             rx = new_rx;
                             process_opt = Some(new_process);
-                            logs.clear();
                             current_gpu = ConverterGPU::CPU;
+                            is_fallback = true;
                             continue 'conversion;
                         } else {
                             // if already CPU (or CPU fallback failed), finally give up </3
@@ -333,11 +340,22 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                             let error_message = if logs.is_empty() {
                                 "No error logs.".to_string()
                             } else {
-                                logs.join("\n")
+                                // combine original and fallback logs if available
+                                // ideally cpu wouldn't fail and we wouldn't need this, but who knows
+                                let mut message = String::new();
+                                if !fallback_logs.is_empty() {
+                                    message.push_str("-- Original logs --\n");
+                                    message.push_str(&logs.join("\n"));
+                                    message.push_str("\n\n-- CPU fallback logs --\n");
+                                    message.push_str(&fallback_logs.join("\n"));
+                                } else {
+                                    message.push_str(&logs.join("\n"));
+                                }
+                                message
                             };
 
                             let message: String = Message::Error {
-                                message: error_message,
+                                message: error_message.clone(),
                             }
                             .into();
                             session.text(message).await.unwrap();
@@ -347,7 +365,8 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
 
                             tokio::spawn(async move {
                                 if let Err(e) =
-                                    handle_job_failure(job_id, from, to, logs.join("\n")).await
+                                    handle_job_failure(job_id, from, to, error_message.clone())
+                                        .await
                                 {
                                     log::error!("failed to handle job failure: {}", e);
                                 }
