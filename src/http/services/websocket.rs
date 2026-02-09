@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, io::ErrorKind};
+use std::{collections::BTreeMap, env, io::ErrorKind};
 
 use actix_web::{get, rt, web, Error, HttpRequest, HttpResponse};
 use actix_ws::AggregatedMessage;
@@ -305,8 +305,10 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         .unwrap_or(true);
 
                     if is_empty {
-                        // if GPU-related failure, try falling back to CPU/software conversion
-                        if current_gpu != ConverterGPU::CPU {
+                        // if GPU-related failure, try falling back to CPU/software conversion if allowed
+                        let cpu_fallback =
+                            env::var("ALLOW_CPU_FALLBACK").unwrap_or("true".to_string()) == "true";
+                        if current_gpu != ConverterGPU::CPU && cpu_fallback {
                             log::info!("attempting CPU fallback for job {}", job_id);
                             let converter = Converter::new(from, to, speed.clone(), keep_metadata);
                             let (new_rx, new_process) =
@@ -332,7 +334,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                             session.text(message).await.unwrap();
                             continue 'conversion;
                         } else {
-                            // if already CPU (or CPU fallback failed), finally give up </3
+                            // if already CPU, CPU fallback failed, or CPU fallback not allowed, finally give up </3
 
                             // hacky :/
                             let mut app_state = APP_STATE.lock().await;
