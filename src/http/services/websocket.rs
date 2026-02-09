@@ -47,6 +47,9 @@ pub enum Message {
     #[serde(rename = "jobCancelled", rename_all = "camelCase")]
     JobCancelled { job_id: Uuid },
 
+    #[serde(rename = "jobRetried", rename_all = "camelCase")]
+    JobRetried { job_id: Uuid },
+
     #[serde(rename = "progressUpdate", rename_all = "camelCase")]
     ProgressUpdate(ProgressUpdate),
 
@@ -325,6 +328,8 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                             process_opt = Some(new_process);
                             current_gpu = ConverterGPU::CPU;
                             is_fallback = true;
+                            let message: String = Message::JobRetried { job_id }.into();
+                            session.text(message).await.unwrap();
                             continue 'conversion;
                         } else {
                             // if already CPU (or CPU fallback failed), finally give up </3
