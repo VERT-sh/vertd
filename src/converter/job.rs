@@ -78,11 +78,11 @@ impl Job {
         // else check resolution and use default bitrate (based on resolution)
         let (width, height) = self.resolution().await?;
         let default_bitrate = match (width, height) {
-            (w, h) if w >= 3840 || h >= 2160 => 30_000_000, // 4K - 30 Mbps
-            (w, h) if w >= 2560 || h >= 1440 => 14_000_000, // 2K - 14 Mbps
-            (w, h) if w >= 1920 || h >= 1080 => 7_000_000,  // 1080p - 7 Mbps
-            (w, h) if w >= 1280 || h >= 720 => 4_000_000,   // 720p - 4 Mbps
-            _ => 1_500_000,                                 // SD - 1.5 Mbps
+            (w, h) if w >= 3840 || h >= 2160 => 30_000_000, // >4K - 30 Mbps
+            (w, h) if w >= 2560 || h >= 1440 => 14_000_000, // >2K - 14 Mbps
+            (w, h) if w >= 1920 || h >= 1080 => 7_000_000,  // >1080p - 7 Mbps
+            (w, h) if w >= 1280 || h >= 720 => 4_000_000,   // >720p - 4 Mbps
+            _ => 1_500_000,                                 // <SD - 1.5 Mbps
         };
 
         self.bitrate = Some(default_bitrate);
