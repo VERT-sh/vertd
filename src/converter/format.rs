@@ -244,18 +244,13 @@ impl Conversion {
                 ]
             }
 
+            // wmv2/3 doesn't actually have acceleration support on any gpu lmao
+            // should prob just remove this since we have the supported_accelerated_codecs check, but maybe
+            // we should just implement multiple retries in general with different settings/args for any sort of failure?
             ConverterFormat::WMV => {
-                let encoder = self
-                    .accelerated_or_default_codec(
-                        gpu,
-                        &["wmv2", "wmv3"][..],
-                        "wmv2",
-                        supported_accelerated_codecs,
-                    )
-                    .await;
                 vec![
                     "-c:v".to_string(),
-                    encoder,
+                    "wmv3".to_string(),
                     "-c:a".to_string(),
                     "wmav2".to_string(),
                 ]
