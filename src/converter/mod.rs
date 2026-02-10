@@ -52,9 +52,20 @@ impl Converter {
         // the above but we run in parallel
         let (bitrate, fps) = job.bitrate_and_fps().await?;
         let (width, height) = job.resolution().await?;
+
+        let app_state = crate::state::APP_STATE.lock().await;
+        let supported_accelerated_codecs = &app_state.supported_accelerated_codecs;
         let args = self
             .conversion
-            .to_args(&self.speed, gpu, (width, height), bitrate, fps, job)
+            .to_args(
+                &self.speed,
+                gpu,
+                (width, height),
+                bitrate,
+                fps,
+                supported_accelerated_codecs,
+                job,
+            )
             .await?;
         let args = args.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
         let args = args.as_slice();
@@ -62,18 +73,25 @@ impl Converter {
         let gpu_args_refs: Vec<&str> = gpu_args.iter().map(|s| s.as_str()).collect();
 
         let metadata_args: &[&str] = if self.keep_metadata {
-            &["-map_metadata", "0", "-map_chapters", "0"]
+            &["-map_metadata", "0", "-map_chapters", "0"][..]
         } else {
-            &["-map_metadata", "-1", "-map_chapters", "-1"]
+            &["-map_metadata", "-1", "-map_chapters", "-1"][..]
         };
 
         let command = &[
-            &["-y", "-hide_banner", "-loglevel", "error", "-progress", "pipe:1"][..],
+            &[
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-progress",
+                "pipe:1",
+            ][..],
             &gpu_args_refs[..],
-            &["-i", &input_filename],
+            &["-i", &input_filename][..],
             args,
-            metadata_args,
-            &[&output_filename],
+            &metadata_args[..],
+            &[output_filename.as_str()][..],
         ]
         .concat();
         let command = command

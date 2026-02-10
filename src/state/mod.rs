@@ -11,6 +11,7 @@ pub struct AppState {
     pub active_processes: HashMap<Uuid, tokio::process::Child>,
     pub gpu: Option<ConverterGPU>,
     pub vaapi_device_path: Option<String>,
+    pub supported_accelerated_codecs: Vec<String>,
 }
 
 impl AppState {
@@ -20,6 +21,7 @@ impl AppState {
             active_processes: HashMap::new(),
             gpu: None,
             vaapi_device_path: None,
+            supported_accelerated_codecs: Vec::new(),
         }
     }
 }

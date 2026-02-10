@@ -41,6 +41,7 @@ pub enum ConverterFormat {
     NUT,
 }
 
+// referring to this, there's prob more? https://obsproject.com/kb/audio-video-formats-guide#containers
 const CONTAINER_FORMATS: [ConverterFormat; 7] = [
     ConverterFormat::MP4,
     ConverterFormat::MKV,
@@ -50,7 +51,6 @@ const CONTAINER_FORMATS: [ConverterFormat; 7] = [
     ConverterFormat::M2TS,
     ConverterFormat::FLV,
 ];
-
 static CONTAINER_SUPPORT: Lazy<HashMap<ConverterFormat, Vec<&'static str>>> = Lazy::new(|| {
     HashMap::from([
         (
@@ -104,21 +104,37 @@ impl Conversion {
         gpu: &ConverterGPU,
         codecs: &[&str],
         default: &str,
+        supported_accelerated_codecs: &Vec<String>,
     ) -> String {
         for codec in codecs {
-            if let Ok(encoder) = gpu.get_accelerated_codec(codec).await {
-                return encoder;
+            // try all codecs in order and use first supported, else fallback to default
+            if supported_accelerated_codecs
+                .iter()
+                .any(|c| c.contains(codec))
+            {
+                return gpu
+                    .get_accelerated_codec(codec)
+                    .await
+                    .unwrap_or_else(|_| default.to_string());
             }
         }
+
+        warn!(
+            "no supported accelerated codec found for {:?}, falling back to default {}",
+            self.to, default
+        );
         default.to_string()
     }
 
     // workarounds for NVENC for "weirder" videos
+    // i only got a NVIDIA GPU so i don't know what other "workarounds" other encoders might need
+    // -maya
     async fn nvenc_args(
         &self,
         gpu: &ConverterGPU,
         resolution: (u32, u32),
         fps: u32,
+        supported_accelerated_codecs: &Vec<String>,
         job: &Job,
     ) -> anyhow::Result<Vec<String>> {
         let (width, height) = resolution;
@@ -143,7 +159,7 @@ impl Conversion {
 
         // do we still really need to check for codec support? this function is only called if gpu is nvidia
         let encoder = self
-            .accelerated_or_default_codec(gpu, codec_order, default)
+            .accelerated_or_default_codec(gpu, codec_order, default, supported_accelerated_codecs)
             .await;
 
         let mut args = vec!["-c:v".to_string(), encoder.clone()];
@@ -162,7 +178,6 @@ impl Conversion {
             args.extend(["-vf".to_string(), "scale=160:-1".to_string()]);
         }
 
-        args.extend(["-level:v".to_string(), "4.0".to_string()]); // !! remove before committing idiot
         Ok(args)
     }
 
@@ -173,11 +188,10 @@ impl Conversion {
         resolution: (u32, u32),
         bitrate: u64,
         fps: u32,
+        supported_accelerated_codecs: &Vec<String>,
         job: &super::job::Job,
     ) -> anyhow::Result<Vec<String>> {
         let conversion_opts: Vec<String> = match self.to {
-            // container remuxing
-            // MKV, MP4, MOV, FLV, TS
             ConverterFormat::MP4
             | ConverterFormat::MKV
             | ConverterFormat::MOV
@@ -192,14 +206,21 @@ impl Conversion {
             | ConverterFormat::H264 => {
                 // remux if container format
                 if CONTAINER_FORMATS.contains(&self.from) && CONTAINER_FORMATS.contains(&self.to) {
-                    self.remux_args(gpu, job).await
+                    self.remux_args(gpu, supported_accelerated_codecs, job)
+                        .await
                 } else {
                     // else get args for re-encoding
                     if matches!(gpu, ConverterGPU::NVIDIA) {
-                        self.nvenc_args(gpu, resolution, fps, job).await?
+                        self.nvenc_args(gpu, resolution, fps, supported_accelerated_codecs, job)
+                            .await?
                     } else {
                         let encoder = self
-                            .accelerated_or_default_codec(gpu, &["h264"][..], "libx264")
+                            .accelerated_or_default_codec(
+                                gpu,
+                                &["h264"][..],
+                                "libx264",
+                                supported_accelerated_codecs,
+                            )
                             .await;
                         vec![
                             "-c:v".to_string(),
@@ -225,7 +246,12 @@ impl Conversion {
 
             ConverterFormat::WMV => {
                 let encoder = self
-                    .accelerated_or_default_codec(gpu, &["wmv2", "wmv3"][..], "wmv2")
+                    .accelerated_or_default_codec(
+                        gpu,
+                        &["wmv2", "wmv3"][..],
+                        "wmv2",
+                        supported_accelerated_codecs,
+                    )
                     .await;
                 vec![
                     "-c:v".to_string(),
@@ -237,7 +263,12 @@ impl Conversion {
 
             ConverterFormat::WebM => {
                 let encoder = self
-                    .accelerated_or_default_codec(gpu, &["av1", "vp9", "vp8"][..], "libvpx")
+                    .accelerated_or_default_codec(
+                        gpu,
+                        &["av1", "vp9", "vp8"][..],
+                        "libvpx",
+                        supported_accelerated_codecs,
+                    )
                     .await;
                 vec![
                     "-c:v".to_string(),
@@ -256,7 +287,12 @@ impl Conversion {
 
             ConverterFormat::MPEG | ConverterFormat::MPG | ConverterFormat::VOB => {
                 let encoder = self
-                    .accelerated_or_default_codec(gpu, &["mpeg2"][..], "mpeg2video")
+                    .accelerated_or_default_codec(
+                        gpu,
+                        &["mpeg2"][..],
+                        "mpeg2video",
+                        supported_accelerated_codecs,
+                    )
                     .await;
                 vec![
                     "-c:v".to_string(),
@@ -269,7 +305,12 @@ impl Conversion {
             // there is more formats that mxf supports (e.g. on cameras)
             ConverterFormat::MXF => {
                 let encoder = self
-                    .accelerated_or_default_codec(gpu, &["mpeg2"][..], "mpeg2video")
+                    .accelerated_or_default_codec(
+                        gpu,
+                        &["mpeg2"][..],
+                        "mpeg2video",
+                        supported_accelerated_codecs,
+                    )
                     .await;
                 vec![
                     "-c:v".to_string(),
@@ -287,11 +328,6 @@ impl Conversion {
                 "-c:a".to_string(),
                 "libvorbis".to_string(),
             ],
-
-            ConverterFormat::RM | ConverterFormat::RMVB => {
-                warn!("Encoding to RM/RMVB is not supported");
-                return Err(anyhow::anyhow!("Encoding to RM/RMVB is not supported"));
-            }
 
             ConverterFormat::DIVX => vec![
                 "-f".to_string(),
@@ -336,6 +372,14 @@ impl Conversion {
                 "-strict".to_string(),
                 "-1".to_string(),
             ],
+
+            ConverterFormat::RM | ConverterFormat::RMVB => {
+                warn!(
+                    "encoding to {} is not supported, skipping job {}",
+                    self.to, job.id
+                );
+                return Err(anyhow::anyhow!("encoding to {} is not supported", self.to));
+            }
         };
 
         let conversion_opts = conversion_opts
@@ -352,7 +396,13 @@ impl Conversion {
         Ok(result)
     }
 
-    async fn remux_args(&self, gpu: &ConverterGPU, job: &Job) -> Vec<String> {
+    async fn remux_args(
+        &self,
+        gpu: &ConverterGPU,
+        supported_accelerated_codecs: &Vec<String>,
+        job: &Job,
+    ) -> Vec<String> {
+        // referring to this, there's prob more? https://obsproject.com/kb/audio-video-formats-guide#containers
         // video codecs
         // h264 - all supported
         // hevc - all but flv
@@ -388,7 +438,12 @@ impl Conversion {
             .any(|c| video_codec.contains(c))
         {
             let encoder = self
-                .accelerated_or_default_codec(gpu, &["h264"][..], "libx264")
+                .accelerated_or_default_codec(
+                    gpu,
+                    &["h264"][..],
+                    "libx264",
+                    supported_accelerated_codecs,
+                )
                 .await;
             args.extend(["-c:v".to_string(), encoder]);
         }

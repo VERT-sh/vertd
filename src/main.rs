@@ -9,7 +9,7 @@ use dotenv::dotenv;
 use env_logger::Env;
 use http::start_http;
 use log::{error, info, warn};
-use tokio::fs;
+use tokio::{fs, process::Command};
 
 pub const INPUT_LIFETIME: Duration = Duration::from_secs(60 * 60);
 pub const OUTPUT_LIFETIME: Duration = Duration::from_secs(60 * 60);
@@ -193,10 +193,15 @@ async fn main() -> anyhow::Result<()> {
 
     // default to CPU if detection failed
     let gpu = gpu.unwrap_or(ConverterGPU::CPU);
+
+    // check which accelerated codecs are actually supported by this GPU
+    let accelerated_codecs = check_accelerated_codecs(gpu).await;
+
     {
         let mut app_state = state::APP_STATE.lock().await;
         app_state.gpu = Some(gpu);
         app_state.vaapi_device_path = vaapi_device_path;
+        app_state.supported_accelerated_codecs = accelerated_codecs;
     }
 
     // remove input/ and output/ recursively if they exist -- we don't care if this fails tho
@@ -216,4 +221,69 @@ async fn main() -> anyhow::Result<()> {
 
     start_http().await?;
     Ok(())
+}
+
+// checks if the gpu supports accelerated encoding
+// builds supported_accelerated_codecs in AppState to avoid unnecessary errors/conversions (see format.rs#accelerated_or_default_codec)
+async fn check_accelerated_codecs(gpu: ConverterGPU) -> Vec<String> {
+    let test_codecs = vec!["h264", "wmv2", "wmv3", "av1", "vp9", "vp8", "mpeg2"];
+    let mut supported = Vec::new();
+    let mut unsupported = Vec::new();
+
+    if matches!(gpu, ConverterGPU::CPU) {
+        info!("using CPU rendering, skipping accelerated codec checks");
+        return supported;
+    }
+
+    for codec in test_codecs {
+        let encoder = match gpu.get_accelerated_codec(codec).await {
+            Ok(enc) => enc,
+            Err(_) => {
+                unsupported.push(codec.to_string());
+                continue;
+            }
+        };
+
+        let process = Command::new("ffmpeg")
+            .args([
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=duration=1:size=1280x720:rate=30",
+                "-c:v",
+                &encoder,
+                "-f",
+                "null",
+                "-",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn();
+
+        match process {
+            Ok(child) => match child.wait_with_output().await {
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if !stderr.contains("Error while opening encoder") && output.status.success() {
+                        supported.push(codec.to_string());
+                    } else {
+                        unsupported.push(codec.to_string());
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "failed to wait on ffmpeg process for codec {}: {}",
+                        codec, e
+                    );
+                }
+            },
+            Err(e) => {
+                warn!("failed to execute ffmpeg for codec {}: {}", codec, e);
+            }
+        }
+    }
+
+    info!("supported accelerated codecs: {:?}", supported);
+    info!("unsupported accelerated codecs: {:?}", unsupported);
+    supported
 }
