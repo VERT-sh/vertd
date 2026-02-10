@@ -262,6 +262,7 @@ impl Job {
         Ok(pix)
     }
 
+    // codecs.0 = video codec, codecs.1 = audio codec
     pub async fn codecs(&self) -> anyhow::Result<(String, String)> {
         let path = format!("input/{}.{}", self.id, self.from);
 

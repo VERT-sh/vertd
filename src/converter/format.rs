@@ -1,8 +1,12 @@
+use crate::converter::job::Job;
+
 use super::{gpu::ConverterGPU, speed::ConversionSpeed};
-use log::warn;
+use log::{info, warn};
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use strum_macros::{Display, EnumString};
 
-#[derive(Clone, Copy, Debug, PartialEq, EnumString, Display)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumString, Display)]
 #[strum(serialize_all = "lowercase")]
 pub enum ConverterFormat {
     MP4,
@@ -36,6 +40,43 @@ pub enum ConverterFormat {
     ASF,
     NUT,
 }
+
+const CONTAINER_FORMATS: [ConverterFormat; 7] = [
+    ConverterFormat::MP4,
+    ConverterFormat::MKV,
+    ConverterFormat::MOV,
+    ConverterFormat::MTS,
+    ConverterFormat::TS,
+    ConverterFormat::M2TS,
+    ConverterFormat::FLV,
+];
+
+static CONTAINER_SUPPORT: Lazy<HashMap<ConverterFormat, Vec<&'static str>>> = Lazy::new(|| {
+    HashMap::from([
+        (
+            ConverterFormat::MP4,
+            vec![
+                "264", "hevc", "265", "av1", "prores", "alac", "flac", "opus", "pcm_",
+            ],
+        ),
+        (
+            ConverterFormat::MKV,
+            vec![
+                "264", "hevc", "265", "av1", "prores", "alac", "flac", "opus", "pcm_",
+            ],
+        ),
+        (
+            ConverterFormat::MOV,
+            vec![
+                "264", "hevc", "265", "av1", "prores", "alac", "flac", "opus", "pcm_",
+            ],
+        ),
+        (ConverterFormat::MTS, vec!["264", "hevc", "265"]),
+        (ConverterFormat::TS, vec!["264", "hevc", "265"]),
+        (ConverterFormat::M2TS, vec!["264", "hevc", "265"]),
+        (ConverterFormat::FLV, vec!["264"]),
+    ])
+});
 
 impl ConverterFormat {
     pub fn conversion_into_args(
@@ -78,7 +119,7 @@ impl Conversion {
         gpu: &ConverterGPU,
         resolution: (u32, u32),
         fps: u32,
-        job: &super::job::Job,
+        job: &Job,
     ) -> anyhow::Result<Vec<String>> {
         let (width, height) = resolution;
         let is_4k = width == 3840 || height == 2160;
@@ -120,6 +161,8 @@ impl Conversion {
         if width < 160 {
             args.extend(["-vf".to_string(), "scale=160:-1".to_string()]);
         }
+
+        args.extend(["-level:v".to_string(), "4.0".to_string()]); // !! remove before committing idiot
         Ok(args)
     }
 
@@ -133,6 +176,8 @@ impl Conversion {
         job: &super::job::Job,
     ) -> anyhow::Result<Vec<String>> {
         let conversion_opts: Vec<String> = match self.to {
+            // container remuxing
+            // MKV, MP4, MOV, FLV, TS
             ConverterFormat::MP4
             | ConverterFormat::MKV
             | ConverterFormat::MOV
@@ -145,20 +190,26 @@ impl Conversion {
             | ConverterFormat::ThreeGP
             | ConverterFormat::ThreeG2
             | ConverterFormat::H264 => {
-                if matches!(gpu, ConverterGPU::NVIDIA) {
-                    self.nvenc_args(gpu, resolution, fps, job).await?
+                // remux if container format
+                if CONTAINER_FORMATS.contains(&self.from) && CONTAINER_FORMATS.contains(&self.to) {
+                    self.remux_args(gpu, job).await
                 } else {
-                    let encoder = self
-                        .accelerated_or_default_codec(gpu, &["h264"], "libx264")
-                        .await;
-                    vec![
-                        "-c:v".to_string(),
-                        encoder,
-                        "-c:a".to_string(),
-                        "aac".to_string(),
-                        "-strict".to_string(),
-                        "experimental".to_string(),
-                    ]
+                    // else get args for re-encoding
+                    if matches!(gpu, ConverterGPU::NVIDIA) {
+                        self.nvenc_args(gpu, resolution, fps, job).await?
+                    } else {
+                        let encoder = self
+                            .accelerated_or_default_codec(gpu, &["h264"][..], "libx264")
+                            .await;
+                        vec![
+                            "-c:v".to_string(),
+                            encoder,
+                            "-c:a".to_string(),
+                            "aac".to_string(),
+                            "-strict".to_string(),
+                            "experimental".to_string(),
+                        ]
+                    }
                 }
             }
 
@@ -174,7 +225,7 @@ impl Conversion {
 
             ConverterFormat::WMV => {
                 let encoder = self
-                    .accelerated_or_default_codec(gpu, &["wmv2", "wmv3"], "wmv2")
+                    .accelerated_or_default_codec(gpu, &["wmv2", "wmv3"][..], "wmv2")
                     .await;
                 vec![
                     "-c:v".to_string(),
@@ -186,7 +237,7 @@ impl Conversion {
 
             ConverterFormat::WebM => {
                 let encoder = self
-                    .accelerated_or_default_codec(gpu, &["av1", "vp9", "vp8"], "libvpx")
+                    .accelerated_or_default_codec(gpu, &["av1", "vp9", "vp8"][..], "libvpx")
                     .await;
                 vec![
                     "-c:v".to_string(),
@@ -205,7 +256,7 @@ impl Conversion {
 
             ConverterFormat::MPEG | ConverterFormat::MPG | ConverterFormat::VOB => {
                 let encoder = self
-                    .accelerated_or_default_codec(gpu, &["mpeg2"], "mpeg2video")
+                    .accelerated_or_default_codec(gpu, &["mpeg2"][..], "mpeg2video")
                     .await;
                 vec![
                     "-c:v".to_string(),
@@ -218,7 +269,7 @@ impl Conversion {
             // there is more formats that mxf supports (e.g. on cameras)
             ConverterFormat::MXF => {
                 let encoder = self
-                    .accelerated_or_default_codec(gpu, &["mpeg2"], "mpeg2video")
+                    .accelerated_or_default_codec(gpu, &["mpeg2"][..], "mpeg2video")
                     .await;
                 vec![
                     "-c:v".to_string(),
@@ -299,5 +350,59 @@ impl Conversion {
         .concat();
 
         Ok(result)
+    }
+
+    async fn remux_args(&self, gpu: &ConverterGPU, job: &Job) -> Vec<String> {
+        // video codecs
+        // h264 - all supported
+        // hevc - all but flv
+        // av1 - mp4 and mkv
+        // prores - mov and mkv
+
+        // audio codecs
+        // aac - all
+        // alac - mp4, mov, mkv
+        // flac - mp4 and mkv
+        // opus - all but flv and mov
+        // pcm - mp4, mov, mkv
+
+        let mut args = vec!["-c".to_string(), "copy".to_string()];
+        let codecs = job
+            .codecs()
+            .await
+            .unwrap_or_else(|_| ("unknown".to_string(), "unknown".to_string()));
+        let video_codec = codecs.0.to_lowercase();
+        let audio_codec = codecs.1.to_lowercase();
+
+        let supported_video_codecs = CONTAINER_SUPPORT
+            .get(&self.to)
+            .cloned()
+            .unwrap_or_else(|| vec![]);
+        let supported_audio_codecs = CONTAINER_SUPPORT
+            .get(&self.to)
+            .cloned()
+            .unwrap_or_else(|| vec![]);
+
+        if !supported_video_codecs
+            .iter()
+            .any(|c| video_codec.contains(c))
+        {
+            let encoder = self
+                .accelerated_or_default_codec(gpu, &["h264"][..], "libx264")
+                .await;
+            args.extend(["-c:v".to_string(), encoder]);
+        }
+
+        if audio_codec != "none"
+            && !supported_audio_codecs
+                .iter()
+                .any(|c| audio_codec.contains(c))
+        {
+            args.extend(["-c:a".to_string(), "aac".to_string()]);
+        }
+
+        info!("performing remux for job {}", job.id);
+
+        args
     }
 }
