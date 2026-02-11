@@ -235,6 +235,7 @@ async fn check_accelerated_codecs(gpu: ConverterGPU) -> Vec<String> {
         return supported;
     }
 
+    info!("running accelerated codec checks");
     for codec in test_codecs {
         let encoder = match gpu.get_accelerated_codec(codec).await {
             Ok(enc) => enc,

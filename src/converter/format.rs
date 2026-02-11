@@ -12,6 +12,8 @@ pub enum ConverterFormat {
     MP4,
     WebM,
     GIF,
+    APNG,
+    WEBP,
     AVI,
     MKV,
     WMV,
@@ -241,6 +243,21 @@ impl Conversion {
                         "fps={},scale=800:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse=dither=bayer",
                         fps.min(24)
                     )
+                ]
+            }
+
+            ConverterFormat::APNG => {
+                vec![
+                    "-c:v".to_string(),
+                    "apng".to_string(),
+                ]
+            }
+
+            ConverterFormat::WEBP => {
+                vec![
+                    "-c:v".to_string(),
+                    "libwebp".to_string(),
+                    // lossless flag from speed.rs
                 ]
             }
 

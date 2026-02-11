@@ -95,7 +95,20 @@ impl ConversionSpeed {
                 }
             }
 
-            ConverterFormat::GIF => {}
+            ConverterFormat::GIF | ConverterFormat::APNG => {}
+
+            ConverterFormat::WEBP => {
+                args.push("-lossless".to_string());
+                match self {
+                    // anything higher than slow is lossless
+                    ConversionSpeed::UltraFast
+                    | ConversionSpeed::Fast
+                    | ConversionSpeed::Medium => args.push("0".to_string()),
+                    ConversionSpeed::Slow | ConversionSpeed::Slower | ConversionSpeed::VerySlow => {
+                        args.push("1".to_string())
+                    }
+                };
+            }
 
             ConverterFormat::WebM | ConverterFormat::AVI | ConverterFormat::NUT => {
                 args.push("-speed".to_string());
