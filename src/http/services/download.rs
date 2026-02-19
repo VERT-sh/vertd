@@ -1,12 +1,11 @@
 // get /download/{id} where id is Uuid
 
-use actix_web::{get, web, HttpResponse, Responder, ResponseError};
-use futures_util::stream::StreamExt;
-use tokio::{fs, time, time::Duration};
-use tokio_util::io::ReaderStream;
-use std::sync::{Arc, atomic};
-
 use crate::{http::response::ApiResponse, state::APP_STATE};
+use actix_web::{get, web, HttpResponse, Responder, ResponseError};
+use log::{info, warn};
+use std::time::Duration;
+use tokio::fs;
+use tokio_util::io::ReaderStream;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DownloadError {
@@ -30,31 +29,6 @@ impl ResponseError for DownloadError {
         };
 
         HttpResponse::build(status).json(ApiResponse::<()>::Error(self.to_string()))
-    }
-}
-
-struct StreamGuard {
-    file_path: String,
-    bytes_sent: Arc<atomic::AtomicU64>,
-    file_size: u64,
-}
-
-impl Drop for StreamGuard {
-    fn drop(&mut self) {
-        let total_sent = self.bytes_sent.load(atomic::Ordering::Relaxed);
-        let file_path = self.file_path.clone();
-        let file_size = self.file_size;
-
-        tokio::spawn(async move {
-            if total_sent == file_size {
-                log::info!("all bytes successfully sent for {}", file_path);
-                time::sleep(Duration::from_secs(30)).await;
-                log::info!("removing file after successful download: {}", file_path);
-                if let Err(e) = fs::remove_file(&file_path).await {
-                    log::error!("failed to remove file: {}", e);
-                }
-            }
-        });
     }
 }
 
@@ -94,9 +68,23 @@ pub async fn download(path: web::Path<(String, String)>) -> Result<impl Responde
             None => return Err(DownloadError::IncompleteHandshake),
         };
 
-        let mut app_state = APP_STATE.lock().await;
-        app_state.jobs.remove(&id);
-        drop(app_state);
+        let file_path_clone = file_path.clone();
+        let app_state_ref = APP_STATE.clone();
+        let job_id = id;
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(60 * 60)).await;
+            let mut app_state = app_state_ref.lock().await;
+            app_state.jobs.remove(&job_id);
+            drop(app_state);
+            match fs::remove_file(&file_path_clone).await {
+                Ok(_) => info!("deleted file {} after an hour", file_path_clone),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    // file already deleted, ignore
+                }
+                Err(e) => warn!("failed to delete file {}: {}", file_path_clone, e),
+            }
+        });
+
         file_path
     };
 
@@ -113,32 +101,11 @@ pub async fn download(path: web::Path<(String, String)>) -> Result<impl Responde
         .await
         .map_err(DownloadError::FilesystemError)?;
     let file_size = metadata.len();
-    let bytes_sent = Arc::new(atomic::AtomicU64::new(0));
-    let bytes_sent_clone = bytes_sent.clone();
 
-    let file_stream = ReaderStream::new(file);
-    let tracked_stream = file_stream.map(move |chunk| {
-        if let Ok(ref bytes) = chunk {
-            bytes_sent_clone.fetch_add(bytes.len() as u64, atomic::Ordering::Relaxed);
-        }
-        chunk
-    });
-
-    // remove file when stream is dropped
-    let guard = StreamGuard {
-        file_path: file_path.clone(),
-        bytes_sent: bytes_sent.clone(),
-        file_size,
-    };
-
-    // keep guard alive while streaming
-    let http_stream = tracked_stream.inspect(move |_| {
-        let _ = &guard;
-    });
+    let stream = ReaderStream::new(file);
 
     Ok(HttpResponse::Ok()
         .insert_header(("Content-Type", "application/octet-stream"))
-        .insert_header(("Content-Disposition", format!("attachment; filename=\"{}\"", id)))
         .insert_header(("Content-Length", file_size))
-        .streaming(http_stream))
+        .streaming(stream))
 }

@@ -1,7 +1,9 @@
 use actix_cors::Cors;
 use actix_web::{web, App, HttpServer};
 use log::info;
-use services::{download::download, upload::upload, version::version, websocket::websocket};
+use services::{
+    confirm::confirm, download::download, upload::upload, version::version, websocket::websocket,
+};
 
 use crate::http::services::keep::keep;
 
@@ -21,6 +23,7 @@ pub async fn start_http() -> anyhow::Result<()> {
                 web::scope("/api")
                     .service(upload)
                     .service(download)
+                    .service(confirm)
                     .service(websocket)
                     .service(version)
                     .service(keep),

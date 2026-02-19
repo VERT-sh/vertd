@@ -1,3 +1,4 @@
+pub mod confirm;
 pub mod download;
 pub mod keep;
 pub mod upload;
