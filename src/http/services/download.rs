@@ -68,23 +68,6 @@ pub async fn download(path: web::Path<(String, String)>) -> Result<impl Responde
             None => return Err(DownloadError::IncompleteHandshake),
         };
 
-        let file_path_clone = file_path.clone();
-        let app_state_ref = APP_STATE.clone();
-        let job_id = id;
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(60 * 60)).await;
-            let mut app_state = app_state_ref.lock().await;
-            app_state.jobs.remove(&job_id);
-            drop(app_state);
-            match fs::remove_file(&file_path_clone).await {
-                Ok(_) => info!("deleted file {} after an hour", file_path_clone),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    // file already deleted, ignore
-                }
-                Err(e) => warn!("failed to delete file {}: {}", file_path_clone, e),
-            }
-        });
-
         file_path
     };
 

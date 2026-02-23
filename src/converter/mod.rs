@@ -6,6 +6,7 @@ use format::{Conversion, ConverterFormat};
 use job::{Job, ProgressUpdate};
 use log::error;
 use log::info;
+use serde::{Deserialize, Serialize};
 use speed::ConversionSpeed;
 use tokio::io::AsyncBufReadExt as _;
 use tokio::io::BufReader;
@@ -17,10 +18,22 @@ pub mod gpu;
 pub mod job;
 pub mod speed;
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversionSettings {
+    pub vertd_speed_slider: Option<u8>,
+    pub metadata: bool,
+    pub fps: Option<String>,
+    pub resolution: Option<String>,
+    pub video_bitrate: Option<String>,
+    pub audio_bitrate: Option<String>,
+    pub sample_rate: Option<String>,
+}
+
 pub struct Converter {
     pub conversion: Conversion,
     speed: ConversionSpeed,
-    keep_metadata: bool,
+    settings: ConversionSettings,
 }
 
 impl Converter {
@@ -28,12 +41,12 @@ impl Converter {
         from: ConverterFormat,
         to: ConverterFormat,
         speed: ConversionSpeed,
-        keep_metadata: bool,
+        settings: ConversionSettings,
     ) -> Self {
         Self {
             conversion: Conversion::new(from, to),
             speed,
-            keep_metadata,
+            settings,
         }
     }
 
@@ -46,11 +59,15 @@ impl Converter {
         let (tx, rx) = mpsc::channel(1);
         let input_filename = format!("input/{}.{}", job.id, self.conversion.from.to_string());
         let output_filename = format!("output/{}.{}", job.id, self.conversion.to.to_string());
-        // let gpu = gpu::get_gpu().await;
-        // let bitrate = job.bitrate().await?;
-        // let fps = job.fps().await?;
-        // the above but we run in parallel
-        let (bitrate, fps) = job.bitrate_and_fps().await?;
+
+        // use custom bitrate from speed if provided, else detect from file
+        let bitrate = if let ConversionSpeed::Bitrate(b) = self.speed {
+            b as u64
+        } else {
+            job.bitrate().await?
+        };
+
+        let fps = job.fps().await?;
         let (width, height) = job.resolution().await?;
 
         let app_state = crate::state::APP_STATE.lock().await;
@@ -65,6 +82,7 @@ impl Converter {
                 fps,
                 supported_accelerated_codecs,
                 job,
+                &self.settings,
             )
             .await?;
         let args = args.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
@@ -72,7 +90,7 @@ impl Converter {
         let gpu_args = gpu.hwaccel_args(vaapi_device_path);
         let gpu_args_refs: Vec<&str> = gpu_args.iter().map(|s| s.as_str()).collect();
 
-        let metadata_args: &[&str] = if self.keep_metadata {
+        let metadata_args: &[&str] = if self.settings.metadata {
             &["-map_metadata", "0", "-map_chapters", "0"][..]
         } else {
             &["-map_metadata", "-1", "-map_chapters", "-1"][..]

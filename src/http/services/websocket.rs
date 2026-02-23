@@ -15,15 +15,11 @@ use crate::{
         gpu::ConverterGPU,
         job::{JobState, ProgressUpdate},
         speed::ConversionSpeed,
-        Converter,
+        ConversionSettings, Converter,
     },
     state::APP_STATE,
     OUTPUT_LIFETIME,
 };
-
-fn default_keep_metadata() -> bool {
-    true
-}
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "camelCase")]
@@ -33,9 +29,7 @@ pub enum Message {
         token: String,
         job_id: Uuid,
         to: String,
-        speed: ConversionSpeed,
-        #[serde(default = "default_keep_metadata")]
-        keep_metadata: bool,
+        settings: ConversionSettings,
     },
 
     #[serde(rename = "cancelJob", rename_all = "camelCase")]
@@ -89,8 +83,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                 token,
                 job_id,
                 to,
-                speed,
-                keep_metadata,
+                settings,
             } = message
             {
                 let Some(mut job) = ({
@@ -145,7 +138,30 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     continue;
                 };
 
-                let converter = Converter::new(from, to, speed.clone(), keep_metadata);
+                log::info!("{:?}", settings);
+
+                // determine speed - vertdspeedslider is 0-5, from very slow to very fast
+                // but if bitrate is set, ignore speed slider
+                let speed = if let Some(ref video_bitrate) = settings.video_bitrate {
+                    match video_bitrate.parse::<u32>() {
+                        Ok(bitrate) => ConversionSpeed::Bitrate(bitrate),
+                        Err(_) => ConversionSpeed::Medium,
+                    }
+                } else if let Some(vertd_speed_slider) = settings.vertd_speed_slider {
+                    match vertd_speed_slider {
+                        0 => ConversionSpeed::VerySlow,
+                        1 => ConversionSpeed::Slower,
+                        2 => ConversionSpeed::Slow,
+                        3 => ConversionSpeed::Medium,
+                        4 => ConversionSpeed::Fast,
+                        5 => ConversionSpeed::UltraFast,
+                        _ => ConversionSpeed::Medium,
+                    }
+                } else {
+                    ConversionSpeed::Medium
+                };
+
+                let converter = Converter::new(from, to, speed.clone(), settings.clone());
 
                 let (gpu, vaapi_device_path) = {
                     let app_state = APP_STATE.lock().await;
@@ -310,7 +326,8 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                             env::var("ALLOW_CPU_FALLBACK").unwrap_or("true".to_string()) == "true";
                         if current_gpu != ConverterGPU::CPU && cpu_fallback {
                             log::info!("attempting CPU fallback for job {}", job_id);
-                            let converter = Converter::new(from, to, speed.clone(), keep_metadata);
+                            let converter =
+                                Converter::new(from, to, speed.clone(), settings.clone());
                             let (new_rx, new_process) =
                                 match converter.convert(&mut job, &ConverterGPU::CPU, None).await {
                                     Ok((rx, process)) => (rx, process),

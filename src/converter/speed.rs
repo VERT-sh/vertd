@@ -12,6 +12,7 @@ pub enum ConversionSpeed {
     Slow,
     Slower,
     VerySlow,
+    Bitrate(u32),
 }
 
 impl ConversionSpeed {
@@ -23,6 +24,7 @@ impl ConversionSpeed {
             ConversionSpeed::Slow => 1.06,
             ConversionSpeed::Slower => 1.12,
             ConversionSpeed::VerySlow => 1.18,
+            ConversionSpeed::Bitrate(_) => 1.0, // doesn't need multiplier lol
         }
     }
 
@@ -43,55 +45,61 @@ impl ConversionSpeed {
             | ConverterFormat::ThreeG2
             | ConverterFormat::H264
             | ConverterFormat::DIVX => {
-                args.push("-preset".to_string());
-                match gpu {
-                    ConverterGPU::NVIDIA => match self {
-                        // only "slow", "medium", and "fast" are supported
-                        ConversionSpeed::VerySlow | ConversionSpeed::Slower => {
-                            args.push("slow".to_string())
-                        }
-                        ConversionSpeed::Slow | ConversionSpeed::Medium => {
-                            args.push("medium".to_string())
-                        }
-                        ConversionSpeed::Fast | ConversionSpeed::UltraFast => {
-                            args.push("fast".to_string())
-                        }
-                    },
+                if !matches!(self, ConversionSpeed::Bitrate(_)) {
+                    args.push("-preset".to_string());
+                    match gpu {
+                        ConverterGPU::NVIDIA => match self {
+                            // only "slow", "medium", and "fast" are supported
+                            ConversionSpeed::VerySlow | ConversionSpeed::Slower => {
+                                args.push("slow".to_string())
+                            }
+                            ConversionSpeed::Slow | ConversionSpeed::Medium => {
+                                args.push("medium".to_string())
+                            }
+                            ConversionSpeed::Fast | ConversionSpeed::UltraFast => {
+                                args.push("fast".to_string())
+                            }
+                            ConversionSpeed::Bitrate(_) => unreachable!(),
+                        },
 
-                    ConverterGPU::AMD => {
-                        #[cfg(target_os = "windows")]
-                        // amf encoder
-                        match self {
-                            ConversionSpeed::UltraFast | ConversionSpeed::Fast => {
-                                args.push("speed".to_string())
+                        ConverterGPU::AMD => {
+                            #[cfg(target_os = "windows")]
+                            // amf encoder
+                            match self {
+                                ConversionSpeed::UltraFast | ConversionSpeed::Fast => {
+                                    args.push("speed".to_string())
+                                }
+                                ConversionSpeed::Medium | ConversionSpeed::Slow => {
+                                    args.push("balanced".to_string())
+                                }
+                                ConversionSpeed::Slower | ConversionSpeed::VerySlow => {
+                                    args.push("quality".to_string())
+                                }
+                                ConversionSpeed::Bitrate(_) => unreachable!(),
                             }
-                            ConversionSpeed::Medium | ConversionSpeed::Slow => {
-                                args.push("balanced".to_string())
-                            }
-                            ConversionSpeed::Slower | ConversionSpeed::VerySlow => {
-                                args.push("quality".to_string())
+                            #[cfg(not(target_os = "windows"))]
+                            // vaapi encoder
+                            match self {
+                                ConversionSpeed::UltraFast => args.push("ultrafast".to_string()),
+                                ConversionSpeed::Fast => args.push("fast".to_string()),
+                                ConversionSpeed::Medium => args.push("medium".to_string()),
+                                ConversionSpeed::Slow => args.push("slow".to_string()),
+                                ConversionSpeed::Slower => args.push("slower".to_string()),
+                                ConversionSpeed::VerySlow => args.push("veryslow".to_string()),
+                                ConversionSpeed::Bitrate(_) => unreachable!(),
                             }
                         }
-                        #[cfg(not(target_os = "windows"))]
-                        // vaapi encoder
-                        match self {
+
+                        _ => match self {
                             ConversionSpeed::UltraFast => args.push("ultrafast".to_string()),
                             ConversionSpeed::Fast => args.push("fast".to_string()),
                             ConversionSpeed::Medium => args.push("medium".to_string()),
                             ConversionSpeed::Slow => args.push("slow".to_string()),
                             ConversionSpeed::Slower => args.push("slower".to_string()),
                             ConversionSpeed::VerySlow => args.push("veryslow".to_string()),
-                        }
+                            ConversionSpeed::Bitrate(_) => unreachable!(),
+                        },
                     }
-
-                    _ => match self {
-                        ConversionSpeed::UltraFast => args.push("ultrafast".to_string()),
-                        ConversionSpeed::Fast => args.push("fast".to_string()),
-                        ConversionSpeed::Medium => args.push("medium".to_string()),
-                        ConversionSpeed::Slow => args.push("slow".to_string()),
-                        ConversionSpeed::Slower => args.push("slower".to_string()),
-                        ConversionSpeed::VerySlow => args.push("veryslow".to_string()),
-                    },
                 }
             }
 
@@ -107,6 +115,7 @@ impl ConversionSpeed {
                     ConversionSpeed::Slow | ConversionSpeed::Slower | ConversionSpeed::VerySlow => {
                         args.push("1".to_string())
                     }
+                    ConversionSpeed::Bitrate(_) => args.push("0".to_string()), // bitrate doesn't affect lossless setting
                 };
             }
 
@@ -119,6 +128,7 @@ impl ConversionSpeed {
                     ConversionSpeed::Slow => args.push("1".to_string()),
                     ConversionSpeed::Slower => args.push("0".to_string()),
                     ConversionSpeed::VerySlow => args.push("-1".to_string()),
+                    ConversionSpeed::Bitrate(_) => {},
                 };
             }
 
@@ -132,6 +142,7 @@ impl ConversionSpeed {
                     ConversionSpeed::Slower | ConversionSpeed::VerySlow => {
                         args.push("0".to_string())
                     }
+                    ConversionSpeed::Bitrate(_) => {},
                 }
             }
 

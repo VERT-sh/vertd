@@ -1,6 +1,6 @@
 use crate::converter::job::Job;
 
-use super::{gpu::ConverterGPU, speed::ConversionSpeed};
+use super::{gpu::ConverterGPU, speed::ConversionSpeed, ConversionSettings};
 use log::{info, warn};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -192,7 +192,21 @@ impl Conversion {
         fps: u32,
         supported_accelerated_codecs: &Vec<String>,
         job: &super::job::Job,
+        settings: &ConversionSettings,
     ) -> anyhow::Result<Vec<String>> {
+        // TODO: separate video and audio encoding check
+        let requires_encoding = [
+            &settings.fps,
+            &settings.resolution,
+            &settings.audio_bitrate,
+            &settings.sample_rate,
+        ]
+        .iter()
+        .any(|setting| setting.as_deref() != Some("auto") && setting.is_some());
+
+        let is_container_to_container =
+            CONTAINER_FORMATS.contains(&self.from) && CONTAINER_FORMATS.contains(&self.to);
+        let can_remux = is_container_to_container && !requires_encoding;
         let conversion_opts: Vec<String> = match self.to {
             ConverterFormat::MP4
             | ConverterFormat::MKV
@@ -206,8 +220,8 @@ impl Conversion {
             | ConverterFormat::ThreeGP
             | ConverterFormat::ThreeG2
             | ConverterFormat::H264 => {
-                // remux if container format
-                if CONTAINER_FORMATS.contains(&self.from) && CONTAINER_FORMATS.contains(&self.to) {
+                // remux if container format and no custom settings require encoding
+                if can_remux {
                     self.remux_args(gpu, supported_accelerated_codecs, job)
                         .await
                 } else {
@@ -247,10 +261,7 @@ impl Conversion {
             }
 
             ConverterFormat::APNG => {
-                vec![
-                    "-c:v".to_string(),
-                    "apng".to_string(),
-                ]
+                vec!["-c:v".to_string(), "apng".to_string()]
             }
 
             ConverterFormat::WEBP => {
@@ -264,6 +275,7 @@ impl Conversion {
             // wmv2/3 doesn't actually have acceleration support on any gpu lmao
             // should prob just remove this since we have the supported_accelerated_codecs check, but maybe
             // we should just implement multiple retries in general with different settings/args for any sort of failure?
+            // TODO: wmv3 not existing what?
             ConverterFormat::WMV => {
                 vec![
                     "-c:v".to_string(),
@@ -399,11 +411,51 @@ impl Conversion {
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
 
-        let result = [
+        let mut result = [
             conversion_opts,
             self.to.conversion_into_args(speed, gpu, bitrate),
         ]
         .concat();
+
+        // apply custom settings if provided and not "auto"
+        // custom fps
+        if let Some(ref custom_fps) = settings.fps {
+            if custom_fps != "auto" {
+                if let Ok(fps_val) = custom_fps.parse::<u32>() {
+                    result.extend(["-r".to_string(), fps_val.to_string()]);
+                }
+            }
+        }
+
+        // custom resolution
+        if let Some(ref custom_res) = settings.resolution {
+            if custom_res != "auto" {
+                if let Some((w, h)) = custom_res.split_once('x') {
+                    if w.parse::<u32>().is_ok() && h.parse::<u32>().is_ok() {
+                        result.extend(["-vf".to_string(), format!("scale={}:{}", w, h)]);
+                    }
+                }
+            }
+        }
+
+        // custom audio bitrate
+        if let Some(ref audio_br) = settings.audio_bitrate {
+            if audio_br != "auto" {
+                result.extend(["-b:a".to_string(), audio_br.clone()]);
+            }
+        }
+
+        // custom sample rate
+        if let Some(ref sample_r) = settings.sample_rate {
+            if sample_r != "auto" {
+                result.extend(["-ar".to_string(), sample_r.clone()]);
+            }
+        }
+
+        // TODO: allow specifingy audio and vidoe codec
+        if !result.contains(&"-c:a".to_string()) {
+            result.extend(["-c:a".to_string(), "aac".to_string()]);
+        }
 
         Ok(result)
     }
