@@ -411,11 +411,15 @@ impl Conversion {
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
 
-        let mut result = [
-            conversion_opts,
-            self.to.conversion_into_args(speed, gpu, bitrate),
-        ]
-        .concat();
+        let mut result = if can_remux {
+            conversion_opts
+        } else {
+            [
+                conversion_opts,
+                self.to.conversion_into_args(speed, gpu, bitrate),
+            ]
+            .concat()
+        };
 
         // apply custom settings if provided and not "auto"
         // custom fps

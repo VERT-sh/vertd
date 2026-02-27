@@ -2,8 +2,6 @@
 
 use crate::{http::response::ApiResponse, state::APP_STATE};
 use actix_web::{get, web, HttpResponse, Responder, ResponseError};
-use log::{info, warn};
-use std::time::Duration;
 use tokio::fs;
 use tokio_util::io::ReaderStream;
 

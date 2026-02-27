@@ -16,18 +16,6 @@ pub enum ConversionSpeed {
 }
 
 impl ConversionSpeed {
-    pub fn to_bitrate_mul(&self) -> f64 {
-        match self {
-            ConversionSpeed::UltraFast => 0.88,
-            ConversionSpeed::Fast => 0.94,
-            ConversionSpeed::Medium => 1.0,
-            ConversionSpeed::Slow => 1.06,
-            ConversionSpeed::Slower => 1.12,
-            ConversionSpeed::VerySlow => 1.18,
-            ConversionSpeed::Bitrate(_) => 1.0, // doesn't need multiplier lol
-        }
-    }
-
     pub fn to_args(&self, to: &ConverterFormat, gpu: &ConverterGPU, bitrate: u64) -> Vec<String> {
         let mut args = Vec::new();
 

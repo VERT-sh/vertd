@@ -142,23 +142,25 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
 
                 // determine speed - vertdspeedslider is 0-5, from very slow to very fast
                 // but if bitrate is set, ignore speed slider
-                let speed = if let Some(ref video_bitrate) = settings.video_bitrate {
-                    match video_bitrate.parse::<u32>() {
-                        Ok(bitrate) => ConversionSpeed::Bitrate(bitrate),
-                        Err(_) => ConversionSpeed::Medium,
+                let speed = match settings.video_bitrate.as_deref() {
+                    Some("auto") | None => {
+                        match settings.vertd_speed_slider {
+                            Some(0) => ConversionSpeed::VerySlow,
+                            Some(1) => ConversionSpeed::Slower,
+                            Some(2) => ConversionSpeed::Slow,
+                            Some(3) => ConversionSpeed::Medium,
+                            Some(4) => ConversionSpeed::Fast,
+                            Some(5) => ConversionSpeed::UltraFast,
+                            _ => ConversionSpeed::Medium, // fallback
+                        }
                     }
-                } else if let Some(vertd_speed_slider) = settings.vertd_speed_slider {
-                    match vertd_speed_slider {
-                        0 => ConversionSpeed::VerySlow,
-                        1 => ConversionSpeed::Slower,
-                        2 => ConversionSpeed::Slow,
-                        3 => ConversionSpeed::Medium,
-                        4 => ConversionSpeed::Fast,
-                        5 => ConversionSpeed::UltraFast,
-                        _ => ConversionSpeed::Medium,
+                    Some(bitrate_str) => {
+                        // use custom bitrate
+                        match bitrate_str.parse::<u32>() {
+                            Ok(bitrate) => ConversionSpeed::Bitrate(bitrate),
+                            Err(_) => ConversionSpeed::Medium, // fallback
+                        }
                     }
-                } else {
-                    ConversionSpeed::Medium
                 };
 
                 let converter = Converter::new(from, to, speed.clone(), settings.clone());
