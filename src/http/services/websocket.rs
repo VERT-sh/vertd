@@ -144,7 +144,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                 // but if bitrate is set, ignore speed slider
                 let speed = match settings.video_bitrate.as_deref() {
                     Some("auto") | None => {
-                        match settings.vertd_speed_slider {
+                        match settings.vertd_speed {
                             Some(0) => ConversionSpeed::VerySlow,
                             Some(1) => ConversionSpeed::Slower,
                             Some(2) => ConversionSpeed::Slow,

@@ -21,7 +21,7 @@ pub mod speed;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversionSettings {
-    pub vertd_speed_slider: Option<u8>,
+    pub vertd_speed: Option<u8>,
     pub metadata: bool,
     pub fps: Option<String>,
     pub resolution: Option<String>,
