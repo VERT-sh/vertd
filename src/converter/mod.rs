@@ -17,6 +17,7 @@ pub mod format;
 pub mod gpu;
 pub mod job;
 pub mod speed;
+pub mod codecs;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]

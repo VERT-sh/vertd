@@ -1,9 +1,7 @@
 use crate::converter::job::Job;
 
-use super::{gpu::ConverterGPU, speed::ConversionSpeed, ConversionSettings};
+use super::{codecs, gpu::ConverterGPU, speed::ConversionSpeed, ConversionSettings};
 use log::{info, warn};
-use once_cell::sync::Lazy;
-use std::collections::HashMap;
 use strum_macros::{Display, EnumString};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumString, Display)]
@@ -53,32 +51,6 @@ const CONTAINER_FORMATS: [ConverterFormat; 7] = [
     ConverterFormat::M2TS,
     ConverterFormat::FLV,
 ];
-static CONTAINER_SUPPORT: Lazy<HashMap<ConverterFormat, Vec<&'static str>>> = Lazy::new(|| {
-    HashMap::from([
-        (
-            ConverterFormat::MP4,
-            vec![
-                "264", "hevc", "265", "av1", "prores", "alac", "flac", "opus", "pcm_",
-            ],
-        ),
-        (
-            ConverterFormat::MKV,
-            vec![
-                "264", "hevc", "265", "av1", "prores", "alac", "flac", "opus", "pcm_",
-            ],
-        ),
-        (
-            ConverterFormat::MOV,
-            vec![
-                "264", "hevc", "265", "av1", "prores", "alac", "flac", "opus", "pcm_",
-            ],
-        ),
-        (ConverterFormat::MTS, vec!["264", "hevc", "265"]),
-        (ConverterFormat::TS, vec!["264", "hevc", "265"]),
-        (ConverterFormat::M2TS, vec!["264", "hevc", "265"]),
-        (ConverterFormat::FLV, vec!["264"]),
-    ])
-});
 
 impl ConverterFormat {
     pub fn conversion_into_args(
@@ -492,19 +464,7 @@ impl Conversion {
         let video_codec = codecs.0.to_lowercase();
         let audio_codec = codecs.1.to_lowercase();
 
-        let supported_video_codecs = CONTAINER_SUPPORT
-            .get(&self.to)
-            .cloned()
-            .unwrap_or_else(|| vec![]);
-        let supported_audio_codecs = CONTAINER_SUPPORT
-            .get(&self.to)
-            .cloned()
-            .unwrap_or_else(|| vec![]);
-
-        if !supported_video_codecs
-            .iter()
-            .any(|c| video_codec.contains(c))
-        {
+        if !codecs::container_supports_video_codec(self.to, &video_codec) {
             let encoder = self
                 .accelerated_or_default_codec(
                     gpu,
@@ -517,9 +477,7 @@ impl Conversion {
         }
 
         if audio_codec != "none"
-            && !supported_audio_codecs
-                .iter()
-                .any(|c| audio_codec.contains(c))
+            && !codecs::container_supports_audio_codec(self.to, &audio_codec)
         {
             args.extend(["-c:a".to_string(), "aac".to_string()]);
         }

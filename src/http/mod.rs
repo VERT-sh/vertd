@@ -2,7 +2,12 @@ use actix_cors::Cors;
 use actix_web::{web, App, HttpServer};
 use log::info;
 use services::{
-    confirm::confirm, download::download, upload::upload, version::version, websocket::websocket,
+    codecs::{codec, codec_support, codecs},
+    confirm::confirm,
+    download::download,
+    upload::upload,
+    version::version,
+    websocket::websocket,
 };
 
 use crate::http::services::keep::keep;
@@ -26,6 +31,9 @@ pub async fn start_http() -> anyhow::Result<()> {
                     .service(confirm)
                     .service(websocket)
                     .service(version)
+                    .service(codecs)
+                    .service(codec)
+                    .service(codec_support)
                     .service(keep),
             )
     });

@@ -1,3 +1,4 @@
+pub mod codecs;
 pub mod confirm;
 pub mod download;
 pub mod keep;
