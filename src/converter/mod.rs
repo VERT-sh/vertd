@@ -26,7 +26,9 @@ pub struct ConversionSettings {
     pub metadata: bool,
     pub fps: Option<String>,
     pub resolution: Option<String>,
+    pub video_codec: Option<String>,
     pub video_bitrate: Option<String>,
+    pub audio_codec: Option<String>,
     pub audio_bitrate: Option<String>,
     pub sample_rate: Option<String>,
 }

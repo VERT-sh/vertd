@@ -166,11 +166,18 @@ impl Conversion {
         job: &super::job::Job,
         settings: &ConversionSettings,
     ) -> anyhow::Result<Vec<String>> {
-        // TODO: separate video and audio encoding check
-        let requires_encoding = [
+        let requires_video_encoding = [
             &settings.fps,
             &settings.resolution,
+            &settings.video_codec,
+            &settings.video_bitrate,
+        ]
+        .iter()
+        .any(|setting| setting.as_deref() != Some("auto") && setting.is_some());
+
+        let requires_audio_encoding = [
             &settings.audio_bitrate,
+            &settings.audio_codec,
             &settings.sample_rate,
         ]
         .iter()
@@ -178,7 +185,17 @@ impl Conversion {
 
         let is_container_to_container =
             CONTAINER_FORMATS.contains(&self.from) && CONTAINER_FORMATS.contains(&self.to);
-        let can_remux = is_container_to_container && !requires_encoding;
+
+        let mut remux_streams = Vec::new();
+        if is_container_to_container && !requires_video_encoding {
+            remux_streams.push("video".to_string());
+        }
+        if is_container_to_container && !requires_audio_encoding {
+            remux_streams.push("audio".to_string());
+        }
+
+        let remux = !remux_streams.is_empty();
+
         let conversion_opts: Vec<String> = match self.to {
             ConverterFormat::MP4
             | ConverterFormat::MKV
@@ -192,9 +209,8 @@ impl Conversion {
             | ConverterFormat::ThreeGP
             | ConverterFormat::ThreeG2
             | ConverterFormat::H264 => {
-                // remux if container format and no custom settings require encoding
-                if can_remux {
-                    self.remux_args(gpu, supported_accelerated_codecs, job)
+                if remux {
+                    self.remux_args(gpu, supported_accelerated_codecs, job, &remux_streams)
                         .await
                 } else {
                     // else get args for re-encoding
@@ -379,7 +395,7 @@ impl Conversion {
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
 
-        let mut result = if can_remux {
+        let mut result = if remux {
             conversion_opts
         } else {
             [
@@ -417,6 +433,20 @@ impl Conversion {
             }
         }
 
+        // custom video codec
+        if let Some(ref video_codec) = settings.video_codec {
+            if video_codec != "auto" {
+                result.extend(["-c:v".to_string(), video_codec.clone()]);
+            }
+        }
+
+        // custom audio codec
+        if let Some(ref audio_codec) = settings.audio_codec {
+            if audio_codec != "auto" {
+                result.extend(["-c:a".to_string(), audio_codec.clone()]);
+            }
+        }
+
         // custom sample rate
         if let Some(ref sample_r) = settings.sample_rate {
             if sample_r != "auto" {
@@ -424,7 +454,6 @@ impl Conversion {
             }
         }
 
-        // TODO: allow specifingy audio and vidoe codec
         if !result.contains(&"-c:a".to_string()) {
             result.extend(["-c:a".to_string(), "aac".to_string()]);
         }
@@ -437,6 +466,7 @@ impl Conversion {
         gpu: &ConverterGPU,
         supported_accelerated_codecs: &Vec<String>,
         job: &Job,
+        remux: &Vec<String>,
     ) -> Vec<String> {
         // referring to this, there's prob more? https://obsproject.com/kb/audio-video-formats-guide#containers
         // video codecs
@@ -460,7 +490,12 @@ impl Conversion {
         let video_codec = codecs.0.to_lowercase();
         let audio_codec = codecs.1.to_lowercase();
 
-        if !codecs::container_supports_video_codec(self.to, &video_codec) {
+        let remux_video = remux.contains(&"video".to_string());
+        let remux_audio = remux.contains(&"audio".to_string());
+
+        if remux_video {
+            args.extend(["-c:v".to_string(), "copy".to_string()]);
+        } else if !remux_video || !codecs::container_supports_video_codec(self.to, &video_codec) {
             let encoder = self
                 .accelerated_or_default_codec(
                     gpu,
@@ -472,7 +507,12 @@ impl Conversion {
             args.extend(["-c:v".to_string(), encoder]);
         }
 
-        if audio_codec != "none" && !codecs::container_supports_audio_codec(self.to, &audio_codec) {
+        if remux_audio {
+            args.extend(["-c:a".to_string(), "copy".to_string()]);
+        } else if !remux_audio
+            || (audio_codec != "none"
+                && !codecs::container_supports_audio_codec(self.to, &audio_codec))
+        {
             args.extend(["-c:a".to_string(), "aac".to_string()]);
         }
 
