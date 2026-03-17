@@ -14,17 +14,17 @@ pub struct CodecCatalog {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ContainerCodecSupport {
-    pub container: String,
+pub struct FormatCodecSupport {
+    pub format: String,
     pub video_codecs: Vec<String>,
     pub audio_codecs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CodecContainersSupport {
+pub struct CodecFormatsSupport {
     pub codec: String,
-    pub containers: Vec<String>,
+    pub formats: Vec<String>,
 }
 
 pub fn codec_support_for(
@@ -183,11 +183,11 @@ pub fn all_supported_codecs() -> CodecCatalog {
     CodecCatalog { video, audio, all }
 }
 
-pub fn container_support(container: ConverterFormat) -> Option<ContainerCodecSupport> {
-    let (video_codecs, audio_codecs) = codec_support_for(container)?;
+pub fn format_support(format: ConverterFormat) -> Option<FormatCodecSupport> {
+    let (video_codecs, audio_codecs) = codec_support_for(format)?;
 
-    Some(ContainerCodecSupport {
-        container: container.to_string(),
+    Some(FormatCodecSupport {
+        format: format.to_string(),
         video_codecs: video_codecs
             .iter()
             .map(|codec| codec.to_string())
@@ -199,27 +199,27 @@ pub fn container_support(container: ConverterFormat) -> Option<ContainerCodecSup
     })
 }
 
-pub fn containers_for_codec(codec: &str) -> CodecContainersSupport {
+pub fn formats_for_codec(codec: &str) -> CodecFormatsSupport {
     let codec = codec.to_lowercase();
-    let mut containers = Vec::new();
+    let mut formats = Vec::new();
 
-    for container in ConverterFormat::iter() {
-        let Some((video, audio)) = codec_support_for(container) else {
+    for format in ConverterFormat::iter() {
+        let Some((video, audio)) = codec_support_for(format) else {
             continue;
         };
 
         if video.iter().any(|c| *c == codec) || audio.iter().any(|c| *c == codec) {
-            containers.push(container.to_string());
+            formats.push(format.to_string());
         }
     }
 
-    containers.sort();
+    formats.sort();
 
-    CodecContainersSupport { codec, containers }
+    CodecFormatsSupport { codec, formats }
 }
 
-pub fn container_supports_video_codec(container: ConverterFormat, codec: &str) -> bool {
-    let Some((video, _)) = codec_support_for(container) else {
+pub fn support_video_codec(format: ConverterFormat, codec: &str) -> bool {
+    let Some((video, _)) = codec_support_for(format) else {
         return false;
     };
 
@@ -227,8 +227,8 @@ pub fn container_supports_video_codec(container: ConverterFormat, codec: &str) -
     video.iter().any(|supported| codec.contains(supported))
 }
 
-pub fn container_supports_audio_codec(container: ConverterFormat, codec: &str) -> bool {
-    let Some((_, audio)) = codec_support_for(container) else {
+pub fn support_audio_codec(format: ConverterFormat, codec: &str) -> bool {
+    let Some((_, audio)) = codec_support_for(format) else {
         return false;
     };
 
