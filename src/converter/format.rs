@@ -2,9 +2,9 @@ use crate::converter::job::Job;
 
 use super::{codecs, gpu::ConverterGPU, speed::ConversionSpeed, ConversionSettings};
 use log::{info, warn};
-use strum_macros::{Display, EnumString};
+use strum_macros::{Display, EnumIter, EnumString};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumString, Display)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumString, Display, EnumIter)]
 #[strum(serialize_all = "lowercase")]
 pub enum ConverterFormat {
     MP4,
@@ -244,14 +244,10 @@ impl Conversion {
                 ]
             }
 
-            // wmv2/3 doesn't actually have acceleration support on any gpu lmao
-            // should prob just remove this since we have the supported_accelerated_codecs check, but maybe
-            // we should just implement multiple retries in general with different settings/args for any sort of failure?
-            // TODO: wmv3 not existing what?
             ConverterFormat::WMV => {
                 vec![
                     "-c:v".to_string(),
-                    "wmv3".to_string(),
+                    "wmv2".to_string(),
                     "-c:a".to_string(),
                     "wmav2".to_string(),
                 ]
@@ -476,9 +472,7 @@ impl Conversion {
             args.extend(["-c:v".to_string(), encoder]);
         }
 
-        if audio_codec != "none"
-            && !codecs::container_supports_audio_codec(self.to, &audio_codec)
-        {
+        if audio_codec != "none" && !codecs::container_supports_audio_codec(self.to, &audio_codec) {
             args.extend(["-c:a".to_string(), "aac".to_string()]);
         }
 
