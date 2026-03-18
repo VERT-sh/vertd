@@ -138,7 +138,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     continue;
                 };
 
-                log::info!("{:?}", settings);
+                log::info!("settings for job {}: {:?}", job_id, settings);
 
                 // determine speed - vertdspeedslider is 0-5, from very slow to very fast
                 // but if bitrate is set, ignore speed slider

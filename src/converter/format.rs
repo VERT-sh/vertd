@@ -100,10 +100,7 @@ impl Conversion {
             "theora" => "libtheora".to_string(),
             "webp" => "libwebp".to_string(),
             "flv1" => "flv".to_string(),
-            "vorbis" => "libvorbis".to_string(),
-            "opus" => "libopus".to_string(),
             "mp3" => "libmp3lame".to_string(),
-            "pcm" => "pcm_s16le".to_string(),
             other => other.to_string(),
         }
     }
@@ -211,6 +208,8 @@ impl Conversion {
             args.extend(["-vf".to_string(), "scale=160:-1".to_string()]);
         }
 
+        args.extend(["-strict".to_string(), "experimental".to_string()]);
+
         Ok(args)
     }
 
@@ -317,22 +316,26 @@ impl Conversion {
                         format!(
                             "fps={},scale=800:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse=dither=bayer",
                             fps.min(24)
-                        )
+                        ),
+                        "-strict".to_string(),
+                        "experimental".to_string(),
                     ]
                 }
 
-                // there is more formats that mxf supports (e.g. on cameras)
-                ConverterFormat::MXF => {
-                    vec!["-strict".to_string(), "unofficial".to_string()]
-                }
-
-                ConverterFormat::DIVX => vec!["-f".to_string(), "avi".to_string()],
+                ConverterFormat::DIVX => vec![
+                    "-f".to_string(),
+                    "avi".to_string(),
+                    "-strict".to_string(),
+                    "experimental".to_string(),
+                ],
 
                 ConverterFormat::SWF => vec![
                     "-f".to_string(),
                     "swf".to_string(),
                     "-b:a".to_string(),
                     "192k".to_string(),
+                    "-strict".to_string(),
+                    "experimental".to_string(),
                 ],
 
                 ConverterFormat::AMV => vec![
@@ -345,7 +348,7 @@ impl Conversion {
                     "-block_size".to_string(),
                     "882".to_string(),
                     "-strict".to_string(),
-                    "-1".to_string(),
+                    "experimental".to_string(),
                 ],
 
                 ConverterFormat::RM | ConverterFormat::RMVB => {
@@ -356,7 +359,9 @@ impl Conversion {
                     return Err(anyhow::anyhow!("encoding to {} is not supported", self.to));
                 }
 
-                _ => vec![],
+                // probably not a good practice but lol, if it generates a bad file then it's
+                // likely the user doing some weird settings override lol
+                _ => vec!["-strict".to_string(), "experimental".to_string()],
             }
         };
 
