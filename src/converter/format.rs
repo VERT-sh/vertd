@@ -92,12 +92,11 @@ impl Conversion {
     fn default_encoder_for_codec(codec: &str) -> String {
         match codec {
             "h264" => "libx264".to_string(),
-            "hevc" | "h265" => "libx265".to_string(),
+            "hevc" => "libx265".to_string(),
             "av1" => "libsvtav1".to_string(),
             "vp8" => "libvpx".to_string(),
             "vp9" => "libvpx-vp9".to_string(),
             "prores" => "prores_ks".to_string(),
-            "theora" => "libtheora".to_string(),
             "webp" => "libwebp".to_string(),
             "flv1" => "flv".to_string(),
             "mp3" => "libmp3lame".to_string(),
