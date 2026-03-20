@@ -27,130 +27,42 @@ pub struct CodecFormatsSupport {
     pub formats: Vec<String>,
 }
 
+#[rustfmt::skip]
 pub fn codec_support_for(
     format: ConverterFormat,
 ) -> Option<(&'static [&'static str], &'static [&'static str])> {
     match format {
         ConverterFormat::MP4 => Some((
-            &[
-                "h264",
-                "hevc",
-                "av1",
-                "mpeg4",
-                "vp9",
-                "mpeg2video",
-                "mpeg1video",
-                "prores",
-            ],
+            &["h264", "hevc", "av1", "mpeg4", "vp9", "mpeg2video", "mpeg1video", "prores"],
             &["aac", "mp3", "ac3", "eac3", "libopus", "alac", "flac"],
         )),
-        ConverterFormat::WebM => Some((&["vp9", "vp8", "av1"], &["libopus", "libvorbis"])),
+        ConverterFormat::WebM => Some((
+            &["vp9", "vp8", "av1"],
+            &["libopus", "libvorbis"],
+        )),
         ConverterFormat::AVI => Some((
-            &[
-                "mpeg4",
-                "msmpeg4v3",
-                "msmpeg4v2",
-                "h264",
-                "mjpeg",
-                "dvvideo",
-                "huffyuv",
-            ],
+            &["mpeg4", "msmpeg4v3", "msmpeg4v2", "h264", "mjpeg", "dvvideo", "huffyuv"],
             &["mp3", "ac3", "pcm_s16le", "pcm_s24le"],
         )),
         ConverterFormat::MKV => Some((
-            &[
-                "h264",
-                "hevc",
-                "av1",
-                "vp9",
-                "vp8",
-                "mpeg2video",
-                "mpeg4",
-                "prores",
-                "dnxhd",
-                "ffv1",
-                "huffyuv",
-                "mjpeg",
-                "mpeg1video",
-            ],
-            &[
-                // common lossy
-                "aac",
-                "mp3",
-                "ac3",
-                "eac3",
-                "dts",
-                "libopus",
-                "libvorbis",
-                // common lossless
-                "flac",
-                "alac",
-                "wavpack",
-                // common PCM variants
-                "pcm_s16le",
-                "pcm_s24le",
-                "pcm_s32le",
-                // float PCM variants (idk)
-                "pcm_f32le",
-                "pcm_f64le",
-                // telephony / legacy PCM
-                "pcm_mulaw",
-                "pcm_alaw",
-                // weird PCM variants
-                "pcm_u8",
-                "pcm_f16le",
-                "pcm_f24le",
-                "pcm_f32be",
-                "pcm_f64be",
-                "pcm_s16be",
-                "pcm_s24be",
-                "pcm_s32be",
-                "pcm_s64be",
-                "pcm_s64le",
-                "pcm_u16be",
-                "pcm_u16le",
-                "pcm_u24be",
-                "pcm_u24le",
-                "pcm_u32be",
-                "pcm_u32le",
-            ],
+            &["h264", "hevc", "av1", "vp9", "vp8", "mpeg2video", "mpeg4", "prores", "dnxhd", "ffv1", "huffyuv", "mjpeg", "mpeg1video"],
+            &["aac", "mp3", "ac3", "eac3", "dts", "libopus", "libvorbis", "flac", "alac", "wavpack", "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le", "pcm_f64le", "pcm_mulaw", "pcm_alaw", "pcm_u8", "pcm_f16le", "pcm_f24le", "pcm_f32be", "pcm_f64be", "pcm_s16be", "pcm_s24be", "pcm_s32be", "pcm_s64be", "pcm_s64le", "pcm_u16be", "pcm_u16le", "pcm_u24be", "pcm_u24le", "pcm_u32be", "pcm_u32le"],
         )),
         ConverterFormat::MOV => Some((
             &["h264", "hevc", "prores", "dnxhd", "mpeg4", "mjpeg", "ffv1"],
-            &[
-                "aac",
-                "alac",
-                "mp3",
-                "flac",
-                "pcm_s16le",
-                "pcm_s24le",
-                "pcm_s32le",
-                "pcm_f32le",
-                "pcm_f64le",
-            ],
+            &["aac", "alac", "mp3", "flac", "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le", "pcm_f64le"],
         )),
         ConverterFormat::M2TS => Some((
             &["h264", "mpeg2video"],
             &["truehd", "dts", "ac3", "eac3", "pcm_bluray"],
         )),
-
         ConverterFormat::MTS => Some((
             &["h264", "mpeg2video", "hevc"],
             &["ac3", "aac", "pcm_bluray", "mp2", "eac3"],
         )),
-
         ConverterFormat::TS => Some((
             &["h264", "hevc", "mpeg2video", "av1", "mpeg1video"],
-            &[
-                "aac",
-                "ac3",
-                "mp2",
-                "mp3",
-                "dts",
-                "eac3",
-                "truehd",
-                "pcm_s16le",
-            ],
+            &["aac", "ac3", "mp2", "mp3", "dts", "eac3", "truehd", "pcm_s16le"],
         )),
         ConverterFormat::MPEG => Some((
             &["mpeg2video", "mpeg1video"],
@@ -164,7 +76,10 @@ pub fn codec_support_for(
             &["h264", "flv1", "h263"],
             &["aac", "mp3", "nellymoser", "speex", "adpcm_swf"],
         )),
-        ConverterFormat::F4V => Some((&["h264"], &["aac", "mp3"])),
+        ConverterFormat::F4V => Some((
+            &["h264"],
+            &["aac", "mp3"],
+        )),
         ConverterFormat::VOB => Some((
             &["mpeg2video", "mpeg1video"],
             &["ac3", "mp2", "pcm_dvd", "pcm_s16le"],
@@ -173,128 +88,62 @@ pub fn codec_support_for(
             &["h264", "mpeg4"],
             &["aac", "ac3", "alac", "mp3", "flac", "libopus", "pcm_s16le"],
         )),
-        ConverterFormat::ThreeGP => {
-            Some((&["h264", "mpeg4", "h263"], &["aac", "amr_nb", "amr_wb"]))
-        }
-        ConverterFormat::ThreeG2 => {
-            Some((&["h264", "mpeg4", "h263"], &["aac", "amr_nb", "amr_wb"]))
-        }
+        ConverterFormat::ThreeGP => Some((
+            &["h264", "mpeg4", "h263"],
+            &["aac", "amr_nb", "amr_wb"],
+        )),
+        ConverterFormat::ThreeG2 => Some((
+            &["h264", "mpeg4", "h263"],
+            &["aac", "amr_nb", "amr_wb"],
+        )),
         ConverterFormat::MXF => Some((
-            &[
-                "prores",
-                "dnxhd",
-                "h264",
-                "mpeg2video",
-                "avc_intra",
-                "jpeg2000",
-            ],
-            &[
-                "pcm_s24le",
-                "pcm_s16le",
-                "pcm_s32le",
-                "pcm_f32le",
-                "pcm_f64le",
-                "aac",
-                "ac3",
-            ],
+            &["prores", "dnxhd", "h264", "mpeg2video", "avc_intra", "jpeg2000"],
+            &["pcm_s24le", "pcm_s16le", "pcm_s32le", "pcm_f32le", "pcm_f64le", "aac", "ac3"],
         )),
         ConverterFormat::OGV => Some((
             &["theora", "vp8", "dirac"],
-            &[
-                "libvorbis",
-                "libopus",
-                "flac",
-                "speex",
-                "pcm_s16le",
-                "wavpack",
-            ],
+            &["libvorbis", "libopus", "flac", "speex", "pcm_s16le", "wavpack"],
         )),
-        ConverterFormat::SWF => Some((&["flv1", "flashsv", "mjpeg"], &["mp3"])),
-        ConverterFormat::AMV => Some((&["amv"], &["adpcm_ima_amv"])),
-        ConverterFormat::ASF => Some((&["wmv2", "wmv1", "msmpeg4v3"], &["wmav2", "wmav1", "mp3"])),
+        ConverterFormat::SWF => Some((
+            &["flv1", "flashsv", "mjpeg"],
+            &["mp3"],
+        )),
+        ConverterFormat::AMV => Some((
+            &["amv"],
+            &["adpcm_ima_amv"],
+        )),
+        ConverterFormat::ASF => Some((
+            &["wmv2", "wmv1", "msmpeg4v3"],
+            &["wmav2", "wmav1", "mp3"],
+        )),
         ConverterFormat::NUT => Some((
-            &[
-                "h264",
-                "mpeg4",
-                "vp9",
-                "vp8",
-                "ffv1",
-                "mjpeg",
-                "huffyuv",
-                "h263",
-                "prores",
-                "mpeg2video",
-                "h261",
-                "msvideo1",
-                "rv10",
-                "rv20",
-                "snow",
-                "svq1",
-                "ljpeg",
-            ],
-            &[
-                // common lossy
-                "aac",
-                "mp3",
-                "ac3",
-                "eac3",
-                "dts",
-                "libopus",
-                "libvorbis",
-                // common lossless
-                "flac",
-                "alac",
-                "wavpack",
-                // common PCM variants
-                "pcm_s16le",
-                "pcm_s24le",
-                "pcm_s32le",
-                // float PCM variants (idk)
-                "pcm_f32le",
-                "pcm_f64le",
-                // telephony / legacy PCM
-                "pcm_mulaw",
-                "pcm_alaw",
-                // weird PCM variants
-                "pcm_u8",
-                "pcm_f16le",
-                "pcm_f24le",
-                "pcm_f32be",
-                "pcm_f64be",
-                "pcm_s16be",
-                "pcm_s24be",
-                "pcm_s32be",
-                "pcm_s64be",
-                "pcm_s64le",
-                "pcm_u16be",
-                "pcm_u16le",
-                "pcm_u24be",
-                "pcm_u24le",
-                "pcm_u32be",
-                "pcm_u32le",
-            ],
+            &["h264", "mpeg4", "vp9", "vp8", "ffv1", "mjpeg", "huffyuv", "h263", "prores", "mpeg2video", "h261", "msvideo1", "rv10", "rv20", "snow", "svq1", "ljpeg"],
+            &["aac", "mp3", "ac3", "eac3", "dts", "libopus", "libvorbis", "flac", "alac", "wavpack", "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le", "pcm_f64le", "pcm_mulaw", "pcm_alaw", "pcm_u8", "pcm_f16le", "pcm_f24le", "pcm_f32be", "pcm_f64be", "pcm_s16be", "pcm_s24be", "pcm_s32be", "pcm_s64be", "pcm_s64le", "pcm_u16be", "pcm_u16le", "pcm_u24be", "pcm_u24le", "pcm_u32be", "pcm_u32le"],
         )),
         ConverterFormat::H264 => Some((
             &["h264"],
-            &[
-                "aac",
-                "mp3",
-                "ac3",
-                "eac3",
-                "libopus",
-                "alac",
-                "flac",
-                "pcm_s16le",
-            ],
+            &["aac", "mp3", "ac3", "eac3", "libopus", "alac", "flac", "pcm_s16le"],
         )),
         ConverterFormat::DIVX => Some((
             &["mpeg4", "h264", "hevc"],
             &["mp3", "ac3", "aac", "pcm_s16le"],
         )),
-        ConverterFormat::GIF => Some((&["gif"], &[])),
-        ConverterFormat::APNG => Some((&["apng"], &[])),
-        ConverterFormat::WEBP => Some((&["webp"], &[])),
-        ConverterFormat::WMV => Some((&["wmv2", "wmv1"], &["wmav2"])),
+        ConverterFormat::GIF => Some((
+            &["gif"],
+            &[],
+        )),
+        ConverterFormat::APNG => Some((
+            &["apng"],
+            &[],
+        )),
+        ConverterFormat::WEBP => Some((
+            &["webp"],
+            &[],
+        )),
+        ConverterFormat::WMV => Some((
+            &["wmv2", "wmv1"],
+            &["wmav2"],
+        )),
         ConverterFormat::RM | ConverterFormat::RMVB => None,
     }
 }
