@@ -2,11 +2,12 @@ use crate::{
     converter::{format::ConverterFormat, job::Job},
     http::response::ApiResponse,
     state::APP_STATE,
+    MAX_UPLOAD_BYTES,
 };
 use actix_multipart::Multipart;
 use actix_web::{post, HttpResponse, Responder, ResponseError};
 use futures_util::StreamExt as _;
-use log::info;
+use log::{info, warn};
 use tokio::{
     fs::{self, File},
     io::AsyncWriteExt,
@@ -30,6 +31,8 @@ pub enum UploadError {
     WriteFile(#[from] std::io::Error),
     #[error("ffprobe failed to read file: {0}")]
     ParseFile(#[from] anyhow::Error),
+    #[error("uploaded file exceeds the maximum allowed size of {limit} bytes")]
+    PayloadTooLarge { limit: usize },
 }
 
 impl ResponseError for UploadError {
@@ -39,6 +42,7 @@ impl ResponseError for UploadError {
             UploadError::GetField(_) => actix_web::http::StatusCode::BAD_REQUEST,
             UploadError::GetChunk(_) => actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
             UploadError::WriteFile(_) => actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+            UploadError::PayloadTooLarge { .. } => actix_web::http::StatusCode::PAYLOAD_TOO_LARGE,
             _ => actix_web::http::StatusCode::BAD_REQUEST,
         };
 
@@ -64,7 +68,8 @@ pub async fn upload(mut payload: Multipart) -> Result<impl Responder, UploadErro
         // get file name
         let filename = content_disposition
             .get_filename()
-            .ok_or_else(|| UploadError::NoFilename)?;
+            .ok_or_else(|| UploadError::NoFilename)?
+            .to_owned();
 
         let ext = filename
             .split('.')
@@ -83,23 +88,43 @@ pub async fn upload(mut payload: Multipart) -> Result<impl Responder, UploadErro
             return Err(UploadError::InvalidExtension(ext));
         }
 
-        info!("uploaded file: {}", filename);
+        info!("new file upload: {}", filename);
 
-        let mut bytes = Vec::new();
-        while let Some(chunk) = field.next().await {
-            let data = chunk?;
-            bytes.extend_from_slice(&data);
-        }
         let rand: [u8; 64] = rand::random();
         let token = hex::encode(rand);
         let our_job = Job::new(token, ext.to_string());
         job = Some(our_job.clone());
-        let mut app_state = APP_STATE.lock().await;
-        // fs::write(format!("input/{}.{}", our_job.id, ext), &bytes).await?;
-        let mut file = File::create(format!("input/{}.{}", our_job.id, ext)).await?;
-        file.write_all(&bytes).await?;
+
+        let input_path = format!("input/{}.{}", our_job.id, ext);
+        let mut file = File::create(&input_path).await?;
+        let mut uploaded_bytes = 0usize;
+        while let Some(chunk) = field.next().await {
+            let data = chunk?;
+            uploaded_bytes += data.len();
+            if let Some(limit) = *MAX_UPLOAD_BYTES {
+                if uploaded_bytes > limit {
+                    drop(file);
+                    let _ = fs::remove_file(&input_path).await;
+                    warn!(
+                        "uploaded file {} exceeded max size limit ({} bytes), rejecting upload",
+                        filename, limit
+                    );
+                    return Err(UploadError::PayloadTooLarge { limit });
+                }
+            }
+
+            file.write_all(&data).await?;
+        }
+
         file.flush().await?;
         drop(file);
+
+        info!(
+            "file uploaded successfully ({} bytes): {}",
+            uploaded_bytes, filename
+        );
+
+        let mut app_state = APP_STATE.lock().await;
         app_state.jobs.insert(our_job.id, our_job.clone());
         // spawn a new task which waits an hour before removing the job
         tokio::spawn(async move {

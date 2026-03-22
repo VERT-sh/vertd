@@ -9,6 +9,7 @@ use dotenv::dotenv;
 use env_logger::Env;
 use http::start_http;
 use log::{error, info, warn};
+use once_cell::sync::Lazy;
 use tokio::{fs, process::Command};
 
 pub const INPUT_LIFETIME: Duration = Duration::from_secs(60 * 60);
@@ -124,6 +125,32 @@ fn get_vaapi_device_path() -> Option<String> {
     None
 }
 
+pub static MAX_UPLOAD_BYTES: Lazy<Option<usize>> = Lazy::new(|| {
+    match std::env::var("MAX_UPLOAD_BYTES") {
+        Ok(value) => {
+            let trimmed = value.trim();
+            // unlimited if empty
+            if trimmed.is_empty() {
+                None
+            } else {
+                match trimmed.parse::<usize>() {
+                    Ok(0) => None, // unlimited if set to 0
+                    Ok(limit) => Some(limit),
+                    Err(e) => {
+                        warn!(
+                        "invalid MAX_UPLOAD_BYTES value '{}': {}. falling back to no upload size limit",
+                        trimmed,
+                        e
+                    );
+                        None
+                    }
+                }
+            }
+        }
+        Err(_) => None,
+    }
+});
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenv().ok();
@@ -217,6 +244,12 @@ async fn main() -> anyhow::Result<()> {
         Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(e.into()),
+    }
+
+    if let Some(limit) = *MAX_UPLOAD_BYTES {
+        info!("max upload size set to {} bytes ({} MB)", limit, limit / 1024 / 1024);
+    } else {
+        info!("no max upload size set - unlimited size allowed");
     }
 
     start_http().await?;

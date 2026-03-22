@@ -243,21 +243,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                         if let Message::CancelJob { token: cancel_token, job_id: cancel_job_id } = parsed_message {
                                             if cancel_job_id == job_id && cancel_token == token {
                                                 log::info!("cancelling job {}", job_id);
-
-                                                let mut app_state = APP_STATE.lock().await;
-                                                if let Some(mut process) = app_state.active_processes.remove(&job_id) {
-                                                    if let Err(e) = process.kill().await {
-                                                        log::error!("failed to kill process for job {}: {}", job_id, e);
-                                                    } else {
-                                                        log::info!("killed process for job {}", job_id);
-                                                        job_cancelled = true;
-                                                    }
-                                                }
-
-                                                if let Some(job) = app_state.jobs.get_mut(&job_id) {
-                                                    job.state = JobState::Completed;
-                                                }
-                                                drop(app_state);
+                                                job_cancelled = true;
 
                                                 let message: String = Message::JobCancelled { job_id }.into();
                                                 session.text(message).await.unwrap();
@@ -281,24 +267,27 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     }
 
                     if !conversion_finished {
-                        // ws closed or job cancelled, exit the outer loop
-                        break 'conversion;
-                    }
+                        // ws closed or job cancelled, clean up and exit outer loop
+                        let process_to_kill = {
+                            let mut app_state = APP_STATE.lock().await;
+                            app_state.active_processes.remove(&job_id)
+                        };
 
-                    // clean up
-                    {
-                        let mut app_state = APP_STATE.lock().await;
-                        if let Some(job) = app_state.jobs.get_mut(&job_id) {
-                            job.state = JobState::Completed;
+                        if let Some(mut process) = process_to_kill {
+                            if let Err(e) = process.kill().await {
+                                log::error!("failed to kill process for job {}: {}", job_id, e);
+                            } else {
+                                log::info!("killed process for job {}", job_id);
+                            }
                         }
 
-                        if !job_cancelled {
-                            // clean process only if not cancelled
-                            app_state.active_processes.remove(&job_id);
-                        } else {
-                            // clean up job if cancelled
-                            app_state.jobs.remove(&job_id);
-                            drop(app_state);
+                        // TODO: possibly allow reconnection to websocket within certain timeframe?
+                        // would need VERT ui changes, probably temporarily store job info in browser if refres/other reasons?
+                        if job_cancelled {
+                            {
+                                let mut app_state = APP_STATE.lock().await;
+                                app_state.jobs.remove(&job_id);
+                            }
 
                             if let Err(e) =
                                 fs::remove_file(&format!("input/{}.{}", job.id, job.from)).await
@@ -310,8 +299,19 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                     );
                                 }
                             }
-                            break 'conversion;
                         }
+
+                        break 'conversion;
+                    }
+
+                    // clean up
+                    {
+                        let mut app_state = APP_STATE.lock().await;
+                        if let Some(job) = app_state.jobs.get_mut(&job_id) {
+                            job.state = JobState::Completed;
+                        }
+
+                        app_state.active_processes.remove(&job_id);
 
                         drop(app_state);
                     }
@@ -413,7 +413,10 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     match fs::remove_file(&format!("input/{}.{}", job.id, job.from)).await {
                         Ok(_) => {}
                         Err(e) => {
-                            error!("failed to remove input file: {}", e);
+                            // if "no such file / os error 2", dont print it
+                            if e.kind() != ErrorKind::NotFound {
+                                log::error!("failed to remove input file: {}", e);
+                            }
                         }
                     };
                 });

@@ -5,8 +5,8 @@ use services::{
     codecs::{codec, codec_support, codecs},
     confirm::confirm,
     download::download,
+    info::{size_limit, version},
     upload::upload,
-    version::version,
     websocket::websocket,
 };
 
@@ -31,6 +31,7 @@ pub async fn start_http() -> anyhow::Result<()> {
                     .service(confirm)
                     .service(websocket)
                     .service(version)
+                    .service(size_limit)
                     .service(codecs)
                     .service(codec)
                     .service(codec_support)
