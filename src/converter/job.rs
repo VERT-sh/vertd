@@ -3,6 +3,24 @@ use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 use uuid::Uuid;
 
+fn validate_ffprobe_output(
+    output: &std::process::Output,
+    path: &str,
+    context: &str,
+) -> anyhow::Result<()> {
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(anyhow::anyhow!(
+        "ffprobe failed while {} for {}: {}",
+        context,
+        path,
+        stderr.trim()
+    ))
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Job {
@@ -69,6 +87,8 @@ impl Job {
             .output()
             .await?;
 
+        validate_ffprobe_output(&output, &format!("input/{}.{}", self.id, self.from), "reading bitrate")?;
+
         // use detected bitrate
         let bitrate = String::from_utf8(output.stdout)?.trim().parse::<u64>().ok();
         if let Some(bitrate_value) = bitrate {
@@ -112,6 +132,8 @@ impl Job {
             .output()
             .await?;
 
+        validate_ffprobe_output(&output, &path, "reading total frames")?;
+
         let total_frames = String::from_utf8(output.stdout)
             .map_err(|e| anyhow::anyhow!("failed to parse total frames: {}", e))?
             .lines()
@@ -147,6 +169,8 @@ impl Job {
             ])
             .output()
             .await?;
+
+        validate_ffprobe_output(&output, &path, "reading fps")?;
 
         let fps_out = String::from_utf8(output.stdout)?;
         let fps_trim = fps_out
@@ -207,6 +231,8 @@ impl Job {
             .output()
             .await?;
 
+        validate_ffprobe_output(&output, &path, "reading resolution")?;
+
         let res_out = String::from_utf8(output.stdout)?;
         let res_str = res_out
             .lines()
@@ -252,6 +278,8 @@ impl Job {
             .output()
             .await?;
 
+        validate_ffprobe_output(&output, &path, "reading pixel format")?;
+
         let pix_out = String::from_utf8(output.stdout)?;
         let pix = pix_out
             .lines()
@@ -282,6 +310,8 @@ impl Job {
             .output()
             .await?;
 
+        validate_ffprobe_output(&output, &path, "reading video codec")?;
+
         let video_codec = String::from_utf8(output.stdout)?
             .lines()
             .next()
@@ -303,6 +333,8 @@ impl Job {
             ])
             .output()
             .await?;
+
+        validate_ffprobe_output(&output, &path, "reading audio codec")?;
 
         let audio_codec = String::from_utf8(output.stdout)?
             .lines()

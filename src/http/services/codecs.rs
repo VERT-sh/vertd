@@ -1,4 +1,4 @@
-use actix_web::{get, web, Responder};
+use actix_web::{get, web, HttpResponse, Responder, ResponseError};
 use std::str::FromStr;
 
 use crate::converter::{
@@ -7,26 +7,37 @@ use crate::converter::{
 };
 use crate::http::response::ApiResponse;
 
+#[derive(Debug, thiserror::Error)]
+pub enum CodecError {
+    #[error("unsupported format: {0}")]
+    UnsupportedFormat(String),
+    #[error("format exists but has no codec map yet: {0}")]
+    MissingCodecMap(String),
+}
+
+impl ResponseError for CodecError {
+    fn error_response(&self) -> HttpResponse {
+        HttpResponse::BadRequest().json(ApiResponse::<()>::Error(self.to_string()))
+    }
+}
+
 #[get("/codecs")]
 pub async fn codecs() -> impl Responder {
     ApiResponse::Success(all_supported_codecs())
 }
 
 #[get("/codecs/{format}")]
-pub async fn codec(format: web::Path<String>) -> impl Responder {
+pub async fn codec(format: web::Path<String>) -> Result<impl Responder, CodecError> {
     let format = format.into_inner().to_lowercase();
     let Ok(format) = ConverterFormat::from_str(&format) else {
-        return ApiResponse::Error(format!("unsupported format: {}", format));
+        return Err(CodecError::UnsupportedFormat(format));
     };
 
     if let Some(support) = format_support(format) {
-        return ApiResponse::Success(support);
+        return Ok(ApiResponse::Success(support));
     }
 
-    ApiResponse::Error(format!(
-        "format exists but has no codec map yet: {}",
-        format
-    ))
+    Err(CodecError::MissingCodecMap(format.to_string()))
 }
 
 #[get("/codecs/support/{codec}")]

@@ -39,14 +39,29 @@ pub async fn download(path: web::Path<(String, String)>) -> Result<impl Responde
         .is_some_and(|p| p == token && !p.is_empty() && p != "supersecret"); // disable admin if password is empty or default
 
     let file_path = if is_admin {
-        // prevent path traversal by checking if valid UUID
-        let id_no_ext = id.split('.').next().unwrap_or(&id);
-        if uuid::Uuid::parse_str(id_no_ext).is_err() {
+        let (raw_uuid, raw_ext) = id.split_once('.').ok_or_else(|| {
             log::warn!("invalid UUID for download: {id}");
+            DownloadError::JobNotFound
+        })?;
+
+        if raw_uuid.contains('/')
+            || raw_uuid.contains('\\')
+            || raw_ext.contains('/')
+            || raw_ext.contains('\\')
+            || raw_ext.is_empty()
+            || !raw_ext.chars().all(|c| c.is_ascii_alphanumeric())
+        {
+            log::warn!("invalid admin filename for download: {id}");
             return Err(DownloadError::JobNotFound);
         }
-        log::warn!("admin download used for id {id}");
-        format!("permanent/{id}")
+
+        let parsed_uuid = uuid::Uuid::parse_str(raw_uuid).map_err(|_| {
+            log::warn!("invalid UUID for download: {id}");
+            DownloadError::JobNotFound
+        })?;
+
+        let sanitized_name = format!("{}.{}", parsed_uuid, raw_ext);
+        format!("permanent/{sanitized_name}")
     } else {
         let id = id.parse().map_err(|_| DownloadError::JobNotFound)?;
         let app_state = APP_STATE.lock().await;
@@ -76,6 +91,10 @@ pub async fn download(path: web::Path<(String, String)>) -> Result<impl Responde
             DownloadError::FilesystemError(e)
         }
     })?;
+
+    if is_admin {
+        log::warn!("admin download used for id {id}");
+    }
 
     let metadata = file
         .metadata()
