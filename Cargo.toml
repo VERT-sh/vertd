@@ -3,6 +3,9 @@ name = "vertd"
 version = "0.1.0"
 edition = "2021"
 
+[lints.clippy]
+upper_case_acronyms = "allow"
+
 [dependencies]
 actix-cors = "0.7.0"
 actix-multipart = "0.7.2"

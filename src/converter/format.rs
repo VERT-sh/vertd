@@ -67,7 +67,7 @@ impl Conversion {
         gpu: &ConverterGPU,
         codecs: &[&str],
         default: &str,
-        supported_accelerated_codecs: &Vec<String>,
+        supported_accelerated_codecs: &[String],
     ) -> String {
         for codec in codecs {
             // try all codecs in order and use first supported, else fallback to default
@@ -128,11 +128,9 @@ impl Conversion {
     async fn preferred_video_encoder(
         &self,
         gpu: &ConverterGPU,
-        supported_accelerated_codecs: &Vec<String>,
+        supported_accelerated_codecs: &[String],
     ) -> Option<String> {
-        let Some((video_codecs, _)) = codecs::codec_support_for(self.to) else {
-            return None;
-        };
+        let (video_codecs, _) = codecs::codec_support_for(self.to)?;
         let preferred_video_codec = *video_codecs.first()?;
         let default_encoder = Self::default_encoder_for_codec(preferred_video_codec);
 
@@ -148,9 +146,7 @@ impl Conversion {
     }
 
     fn preferred_audio_encoder(&self) -> Option<String> {
-        let Some((_, audio_codecs)) = codecs::codec_support_for(self.to) else {
-            return None;
-        };
+        let (_, audio_codecs) = codecs::codec_support_for(self.to)?;
         let preferred_audio_codec = *audio_codecs.first()?;
         Some(Self::default_encoder_for_codec(preferred_audio_codec))
     }
@@ -163,7 +159,7 @@ impl Conversion {
         gpu: &ConverterGPU,
         resolution: (u32, u32),
         fps: u32,
-        supported_accelerated_codecs: &Vec<String>,
+        supported_accelerated_codecs: &[String],
         job: &Job,
     ) -> anyhow::Result<Vec<String>> {
         let (width, height) = resolution;
@@ -180,8 +176,6 @@ impl Conversion {
         let (codec_order, default) = if has_h265 || (has_h264 && (is_10bit || is_4k || is_above_4k))
         {
             (&["hevc"][..], "libx265")
-        } else if has_h264 {
-            (&["h264"][..], "libx264")
         } else {
             (&["h264"][..], "libx264")
         };
@@ -219,7 +213,7 @@ impl Conversion {
         resolution: (u32, u32),
         bitrate: u64,
         fps: u32,
-        supported_accelerated_codecs: &Vec<String>,
+        supported_accelerated_codecs: &[String],
         job: &super::job::Job,
         settings: &ConversionSettings,
     ) -> anyhow::Result<Vec<String>> {
@@ -460,9 +454,9 @@ impl Conversion {
     async fn remux_args(
         &self,
         gpu: &ConverterGPU,
-        supported_accelerated_codecs: &Vec<String>,
+        supported_accelerated_codecs: &[String],
         job: &Job,
-        remux: &Vec<String>,
+        remux: &[String],
     ) -> Vec<String> {
         let mut args = vec!["-c".to_string(), "copy".to_string()];
         let codecs = job

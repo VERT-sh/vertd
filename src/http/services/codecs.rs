@@ -25,7 +25,7 @@ pub async fn codec(format: web::Path<String>) -> impl Responder {
 
     ApiResponse::Error(format!(
         "format exists but has no codec map yet: {}",
-        format.to_string()
+        format
     ))
 }
 

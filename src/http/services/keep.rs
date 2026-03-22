@@ -1,10 +1,6 @@
 // get /download/{id} where id is Uuid
 
-use actix_web::{
-    post,
-    web::Json,
-    HttpResponse, Responder, ResponseError,
-};
+use actix_web::{post, web::Json, HttpResponse, Responder, ResponseError};
 use discord_webhook2::{message, webhook::DiscordWebhook};
 use serde::Deserialize;
 use tokio::fs;
@@ -47,21 +43,23 @@ impl ResponseError for KeepError {
 #[post("/keep")]
 pub async fn keep(body: Json<KeepRequest>) -> Result<impl Responder, KeepError> {
     let body = body.into_inner();
-    let app_state = APP_STATE.lock().await;
+    let (job_id, job_from, job_auth, job_errored) = {
+        let app_state = APP_STATE.lock().await;
+        let job = app_state.jobs.get(&body.id).ok_or(KeepError::JobNotFound)?;
+        (job.id, job.from.clone(), job.auth.clone(), job.errored())
+    };
 
-    let job = app_state.jobs.get(&body.id).ok_or(KeepError::JobNotFound)?;
-
-    if !job.errored() {
+    if !job_errored {
         return Err(KeepError::NotErrored);
     }
 
-    if job.auth != body.token {
+    if job_auth != body.token {
         return Err(KeepError::InvalidToken);
     }
 
     // move the file from temp to permanent storage
-    let current_path = format!("input/{}.{}", job.id, job.from);
-    let permanent_path = format!("permanent/{}.{}", job.id, job.from);
+    let current_path = format!("input/{}.{}", job_id, job_from);
+    let permanent_path = format!("permanent/{}.{}", job_id, job_from);
     log::debug!(
         "moving file to permanent storage: {} -> {}",
         current_path,
@@ -70,8 +68,8 @@ pub async fn keep(body: Json<KeepRequest>) -> Result<impl Responder, KeepError> 
     fs::rename(&current_path, &permanent_path).await?;
     log::info!("moved file to permanent storage: {}", permanent_path);
 
-    let id = job.id;
-    let from = job.from.clone();
+    let id = job_id;
+    let from = job_from;
 
     tokio::spawn(async move {
         if let Err(e) = webhook_permanent(id, from).await {

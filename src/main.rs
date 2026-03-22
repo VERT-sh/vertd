@@ -247,7 +247,11 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if let Some(limit) = *MAX_UPLOAD_BYTES {
-        info!("max upload size set to {} bytes ({} MB)", limit, limit / 1024 / 1024);
+        info!(
+            "max upload size set to {} bytes ({} MB)",
+            limit,
+            limit / 1024 / 1024
+        );
     } else {
         info!("no max upload size set - unlimited size allowed");
     }

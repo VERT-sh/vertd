@@ -4,7 +4,6 @@ use actix_web::{get, rt, web, Error, HttpRequest, HttpResponse};
 use actix_ws::AggregatedMessage;
 use discord_webhook2::{message, webhook::DiscordWebhook};
 use futures_util::StreamExt as _;
-use log::error;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use uuid::Uuid;
@@ -57,6 +56,17 @@ impl From<Message> for String {
     }
 }
 
+async fn send_ws_message(session: &mut actix_ws::Session, message: Message) -> bool {
+    let payload: String = message.into();
+    match session.text(payload).await {
+        Ok(_) => true,
+        Err(e) => {
+            log::error!("failed to send websocket message: {}", e);
+            false
+        }
+    }
+}
+
 #[get("/ws")]
 pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
     let (res, mut session, stream) = actix_ws::handle(&req, stream)?;
@@ -70,11 +80,17 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
             let message: Message = match serde_json::from_str(&text) {
                 Ok(message) => message,
                 Err(e) => {
-                    let message: String = Message::Error {
-                        message: format!("failed to parse message: {}", e),
+                    if !send_ws_message(
+                        &mut session,
+                        Message::Error {
+                            message: format!("failed to parse message: {}", e),
+                        },
+                    )
+                    .await
+                    {
+                        break;
                     }
-                    .into();
-                    session.text(message).await.unwrap();
+
                     continue;
                 }
             };
@@ -87,56 +103,94 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
             } = message
             {
                 let Some(mut job) = ({
-                    let mut app_state = APP_STATE.lock().await;
-                    let job = app_state.jobs.get_mut(&job_id);
-                    let clone = job.as_ref().map(|j| (*j).clone());
+                    let app_state = APP_STATE.lock().await;
+                    let job = app_state.jobs.get(&job_id);
+                    let clone = job.cloned();
                     if let Some(job) = job {
                         if job.completed() {
-                            let message: String = Message::Error {
-                                message: "job already completed".to_string(),
+                            if !send_ws_message(
+                                &mut session,
+                                Message::Error {
+                                    message: "job already completed".to_string(),
+                                },
+                            )
+                            .await
+                            {
+                                break;
                             }
-                            .into();
-                            session.text(message).await.unwrap();
+
                             continue;
                         }
-                        job.to = Some(to.clone());
                     }
+
                     clone
                 }) else {
-                    let message: String = Message::Error {
-                        message: "job not found".to_string(),
+                    if !send_ws_message(
+                        &mut session,
+                        Message::Error {
+                            message: "job not found".to_string(),
+                        },
+                    )
+                    .await
+                    {
+                        break;
                     }
-                    .into();
-                    session.text(message).await.unwrap();
+
                     continue;
                 };
 
                 if job.auth != token {
-                    let message: String = Message::Error {
-                        message: "invalid token".to_string(),
+                    if !send_ws_message(
+                        &mut session,
+                        Message::Error {
+                            message: "invalid token".to_string(),
+                        },
+                    )
+                    .await
+                    {
+                        break;
                     }
-                    .into();
-                    session.text(message).await.unwrap();
+
                     continue;
                 }
 
                 let Ok(from) = job.from.parse::<ConverterFormat>() else {
-                    let message: String = Message::Error {
-                        message: "invalid input format".to_string(),
+                    if !send_ws_message(
+                        &mut session,
+                        Message::Error {
+                            message: "invalid input format".to_string(),
+                        },
+                    )
+                    .await
+                    {
+                        break;
                     }
-                    .into();
-                    session.text(message).await.unwrap();
+
                     continue;
                 };
 
                 let Ok(to) = to.parse::<ConverterFormat>() else {
-                    let message: String = Message::Error {
-                        message: "invalid output format".to_string(),
+                    if !send_ws_message(
+                        &mut session,
+                        Message::Error {
+                            message: "invalid output format".to_string(),
+                        },
+                    )
+                    .await
+                    {
+                        break;
                     }
-                    .into();
-                    session.text(message).await.unwrap();
+
                     continue;
                 };
+
+                {
+                    let mut app_state = APP_STATE.lock().await;
+                    if let Some(state_job) = app_state.jobs.get_mut(&job_id) {
+                        state_job.to = Some(to.to_string());
+                    }
+                }
+                job.to = Some(to.to_string());
 
                 log::info!("settings for job {}: {:?}", job_id, settings);
 
@@ -177,8 +231,10 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                 let gpu = match gpu {
                     Ok(gpu) => gpu,
                     Err(msg) => {
-                        let message: String = Message::Error { message: msg }.into();
-                        session.text(message).await.unwrap();
+                        if !send_ws_message(&mut session, Message::Error { message: msg }).await {
+                            break;
+                        }
+
                         continue;
                     }
                 };
@@ -189,11 +245,17 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                 {
                     Ok((rx, process)) => (rx, process),
                     Err(e) => {
-                        let message: String = Message::Error {
-                            message: format!("failed to convert: {}", e),
+                        if !send_ws_message(
+                            &mut session,
+                            Message::Error {
+                                message: format!("failed to convert: {}", e),
+                            },
+                        )
+                        .await
+                        {
+                            break;
                         }
-                        .into();
-                        session.text(message).await.unwrap();
+
                         continue;
                     }
                 };
@@ -226,8 +288,9 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                         }
                                     }
                                     Some(progress) => {
-                                        let message: String = Message::ProgressUpdate(progress).into();
-                                        session.text(message).await.unwrap();
+                                        if !send_ws_message(&mut session, Message::ProgressUpdate(progress)).await {
+                                            break;
+                                        }
                                     }
                                     None => {
                                         // conversion finished
@@ -245,16 +308,20 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                                 log::info!("cancelling job {}", job_id);
                                                 job_cancelled = true;
 
-                                                let message: String = Message::JobCancelled { job_id }.into();
-                                                session.text(message).await.unwrap();
+                                                if !send_ws_message(&mut session, Message::JobCancelled { job_id }).await {
+                                                    break 'conversion;
+                                                }
 
                                                 break;
-                                            } else {
-                                                let message: String = Message::Error {
+                                            } else if !send_ws_message(
+                                                &mut session,
+                                                Message::Error {
                                                     message: "invalid token or job id for cancellation".to_string(),
-                                                }
-                                                .into();
-                                                session.text(message).await.unwrap();
+                                                },
+                                            )
+                                            .await
+                                            {
+                                                break 'conversion;
                                             }
                                         }
                                     }
@@ -334,14 +401,20 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                 match converter.convert(&mut job, &ConverterGPU::CPU, None).await {
                                     Ok((rx, process)) => (rx, process),
                                     Err(e) => {
-                                        let message: String = Message::Error {
-                                            message: format!(
-                                                "failed to convert with CPU fallback: {}",
-                                                e
-                                            ),
+                                        if !send_ws_message(
+                                            &mut session,
+                                            Message::Error {
+                                                message: format!(
+                                                    "failed to convert with CPU fallback: {}",
+                                                    e
+                                                ),
+                                            },
+                                        )
+                                        .await
+                                        {
+                                            break 'conversion;
                                         }
-                                        .into();
-                                        session.text(message).await.unwrap();
+
                                         continue;
                                     }
                                 };
@@ -349,8 +422,11 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                             process_opt = Some(new_process);
                             current_gpu = ConverterGPU::CPU;
                             is_fallback = true;
-                            let message: String = Message::JobRetried { job_id }.into();
-                            session.text(message).await.unwrap();
+                            if !send_ws_message(&mut session, Message::JobRetried { job_id }).await
+                            {
+                                break 'conversion;
+                            }
+
                             continue 'conversion;
                         } else {
                             // if already CPU, CPU fallback failed, or CPU fallback not allowed, finally give up </3
@@ -380,11 +456,16 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                 message
                             };
 
-                            let message: String = Message::Error {
-                                message: error_message.clone(),
+                            if !send_ws_message(
+                                &mut session,
+                                Message::Error {
+                                    message: error_message.clone(),
+                                },
+                            )
+                            .await
+                            {
+                                break 'conversion;
                             }
-                            .into();
-                            session.text(message).await.unwrap();
 
                             let from = job.from.clone();
                             let to = to.to_string().to_string();
@@ -398,9 +479,9 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                 }
                             });
                         }
-                    } else {
-                        let message: String = Message::JobFinished { job_id }.into();
-                        session.text(message).await.unwrap();
+                    } else if !send_ws_message(&mut session, Message::JobFinished { job_id }).await
+                    {
+                        break 'conversion;
                     }
 
                     break 'conversion;
@@ -427,7 +508,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     app_state.jobs.remove(&job_id);
                     drop(app_state);
 
-                    let path = format!("output/{}.{}", job_id, to.to_string());
+                    let path = format!("output/{}.{}", job_id, to);
                     if let Err(e) = fs::remove_file(&path).await {
                         if e.kind() != ErrorKind::NotFound {
                             log::error!("failed to remove output file: {}", e);

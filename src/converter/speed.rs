@@ -116,7 +116,7 @@ impl ConversionSpeed {
                     ConversionSpeed::Slow => args.push("1".to_string()),
                     ConversionSpeed::Slower => args.push("0".to_string()),
                     ConversionSpeed::VerySlow => args.push("-1".to_string()),
-                    ConversionSpeed::Bitrate(_) => {},
+                    ConversionSpeed::Bitrate(_) => {}
                 };
             }
 
@@ -130,7 +130,7 @@ impl ConversionSpeed {
                     ConversionSpeed::Slower | ConversionSpeed::VerySlow => {
                         args.push("0".to_string())
                     }
-                    ConversionSpeed::Bitrate(_) => {},
+                    ConversionSpeed::Bitrate(_) => {}
                 }
             }
 

@@ -13,11 +13,11 @@ use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
+pub mod codecs;
 pub mod format;
 pub mod gpu;
 pub mod job;
 pub mod speed;
-pub mod codecs;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -60,8 +60,8 @@ impl Converter {
         vaapi_device_path: Option<&str>,
     ) -> anyhow::Result<(mpsc::Receiver<ProgressUpdate>, tokio::process::Child)> {
         let (tx, rx) = mpsc::channel(1);
-        let input_filename = format!("input/{}.{}", job.id, self.conversion.from.to_string());
-        let output_filename = format!("output/{}.{}", job.id, self.conversion.to.to_string());
+        let input_filename = format!("input/{}.{}", job.id, self.conversion.from);
+        let output_filename = format!("output/{}.{}", job.id, self.conversion.to);
 
         // use custom bitrate from speed if provided, else detect from file
         let bitrate = if let ConversionSpeed::Bitrate(b) = self.speed {
@@ -73,8 +73,10 @@ impl Converter {
         let fps = job.fps().await?;
         let (width, height) = job.resolution().await?;
 
-        let app_state = crate::state::APP_STATE.lock().await;
-        let supported_accelerated_codecs = &app_state.supported_accelerated_codecs;
+        let supported_accelerated_codecs = {
+            let app_state = crate::state::APP_STATE.lock().await;
+            app_state.supported_accelerated_codecs.clone()
+        };
         let args = self
             .conversion
             .to_args(
@@ -83,7 +85,7 @@ impl Converter {
                 (width, height),
                 bitrate,
                 fps,
-                supported_accelerated_codecs,
+                &supported_accelerated_codecs,
                 job,
                 &self.settings,
             )
@@ -111,7 +113,7 @@ impl Converter {
             &gpu_args_refs[..],
             &["-i", &input_filename][..],
             args,
-            &metadata_args[..],
+            metadata_args,
             &[output_filename.as_str()][..],
         ]
         .concat();
@@ -160,7 +162,9 @@ impl Converter {
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 error!("{}", line);
-                tx.send(ProgressUpdate::Error(line)).await.unwrap();
+                if tx.send(ProgressUpdate::Error(line)).await.is_err() {
+                    break;
+                }
             }
         });
 

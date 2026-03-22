@@ -16,7 +16,9 @@ pub enum ConverterGPU {
 impl ConverterGPU {
     pub async fn get_accelerated_codec(&self, codec: &str) -> anyhow::Result<String> {
         if matches!(self, ConverterGPU::CPU) {
-            return Err(anyhow!("CPU only uses software encoding, not hardware acceleration"));
+            return Err(anyhow!(
+                "CPU only uses software encoding, not hardware acceleration"
+            ));
         }
 
         let priority = self.encoder_priority();
