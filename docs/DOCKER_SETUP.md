@@ -14,6 +14,7 @@ This file covers how to set up `vertd` using Docker.
 - [CPU-only mode](#cpu-only-mode)
   - [Automatic CPU fallback](#automatic-cpu-fallback)
 - [VA-API device path configuration](#va-api-device-path-configuration)
+- [Setting a file size limit](#setting-a-file-size-limit)
 
 > [!CAUTION]
 > Hardware acceleration under Docker Desktop on Windows and macOS is unsupported.
@@ -282,3 +283,28 @@ $ docker run -d \
 > [!IMPORTANT]
 > This setting only affects Intel and AMD GPUs on Linux, which use VA-API for hardware acceleration.
 > It has no effect on NVIDIA GPUs, Apple GPUs, or other platforms.
+
+## Setting a file size limit
+
+By default, `vertd` has no file size limit set so users can upload files of any size - this is mainly for our official and self-hosted instances.
+
+If you plan to expose your self-hosted instance to the internet, you may want to set a file size limit with the environment variable `MAX_UPLOAD_BYTES`, which sets the maximum in bytes. You should probably make sure to communicate with your users that there is a limit set for your instance as well, but the UI will warn them if they upload a file that is too large.
+
+The following examples show a 2GiB limit:
+
+```yaml
+environment:
+  - MAX_UPLOAD_BYTES=2147483648
+```
+
+Or with `docker run`:
+
+```diff
+$ docker run -d \
+    --name vertd \
+    --restart=unless-stopped \
+    --device=/dev/dri:/dev/dri \
++   -e MAX_UPLOAD_BYTES=2147483648 \
+    -p 24153:24153 \
+    ghcr.io/vert-sh/vertd:latest
+```

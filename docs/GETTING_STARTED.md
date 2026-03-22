@@ -21,6 +21,7 @@ This file covers how to get started with `vertd`.
 - [VA-API device path configuration](#va-api-device-path-configuration)
   - [CLI arguments](#cli-arguments-1)
   - [Environment variable](#environment-variable-1)
+- [Setting a file size limit](#setting-a-file-size-limit)
 
 ## Installing dependencies
 
@@ -50,7 +51,7 @@ $ brew install ffmpeg
 
 ### Linux
 
-The installation steps depend on your distribution. We will only cover the most commonly used ones.
+The installation steps depend on your distribution - this will cover the most commonly used ones:a
 
 #### Debian
 
@@ -81,7 +82,7 @@ $ sudo dnf install -y ffmpeg
 Grab the latest `vertd` release for your operating system and architecture from [this page](https://github.com/VERT-sh/vertd/releases).
 
 > [!NOTE]
-> If you're using an Intel-based Mac, download the `vertd-mac-x86_64` executable. For Mac computers with Apple silicon (M1 or newer), download `vertd-mac-arm64` instead.
+> If you're using an Intel-based Mac, download the `vertd-mac-x86_64` executable. For Mac computers with Apple silicon (A18 Pro/M1 or newer), download `vertd-mac-arm64` instead.
 
 ## Running `vertd` on Windows
 
@@ -239,3 +240,13 @@ $ VERTD_VAAPI_DEVICE_PATH=/dev/dri/renderD129 ./vertd
 > [!IMPORTANT]
 > This setting only affects Intel and AMD GPUs on Linux, which use VA-API for hardware acceleration.
 > It has no effect on NVIDIA GPUs, Apple GPUs, or other platforms.
+
+## Setting a file size limit
+
+By default, `vertd` has no file size limit set so users can upload files of any size - this is mainly for our official and self-hosted instances.
+
+If you plan to expose your self-hosted instance to the internet, you may want to set a file size limit with the environment variable `MAX_UPLOAD_BYTES`, which sets the maximum in bytes. You should probably make sure to communicate with your users that there is a limit set for your instance as well, but the UI will warn them if they upload a file that is too large.
+
+The environment variable `MAX_UPLOAD_BYTES` can be set in your `.env` or in the command line, with the following example being a 2GiB limit:
+
+`$ MAX_UPLOAD_BYTES=2147483648 ./vertd`
