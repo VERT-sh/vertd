@@ -86,12 +86,12 @@ pub async fn upload(mut payload: Multipart) -> Result<impl Responder, UploadErro
             return Err(UploadError::InvalidExtension(ext));
         }
 
-        info!("new file upload: {}", filename);
-
         let rand: [u8; 64] = rand::random();
         let token = hex::encode(rand);
         let our_job = Job::new(token, ext.to_string());
         job = Some(our_job.clone());
+
+        info!("new file upload: {}", our_job.id);
 
         let input_path = format!("input/{}.{}", our_job.id, ext);
         let mut file = File::create(&input_path).await?;
