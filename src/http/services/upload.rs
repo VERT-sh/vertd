@@ -105,7 +105,7 @@ pub async fn upload(mut payload: Multipart) -> Result<impl Responder, UploadErro
                     let _ = fs::remove_file(&input_path).await;
                     warn!(
                         "uploaded file {} exceeded max size limit ({} bytes), rejecting upload",
-                        filename, limit
+                        our_job.id, limit
                     );
                     return Err(UploadError::PayloadTooLarge { limit });
                 }
@@ -119,7 +119,7 @@ pub async fn upload(mut payload: Multipart) -> Result<impl Responder, UploadErro
 
         info!(
             "file uploaded successfully ({} bytes): {}",
-            uploaded_bytes, filename
+            uploaded_bytes, our_job.id
         );
 
         let mut app_state = APP_STATE.lock().await;
