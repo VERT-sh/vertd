@@ -17,6 +17,7 @@ pub mod codecs;
 pub mod format;
 pub mod gpu;
 pub mod job;
+pub mod cap;
 pub mod speed;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

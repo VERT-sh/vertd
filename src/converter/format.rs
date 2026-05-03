@@ -1,6 +1,8 @@
 use crate::converter::job::Job;
 
-use super::{codecs, gpu::ConverterGPU, speed::ConversionSpeed, ConversionSettings};
+use super::{
+    cap::FormatCap, codecs, gpu::ConverterGPU, speed::ConversionSpeed, ConversionSettings,
+};
 use log::{info, warn};
 use strum_macros::{Display, EnumIter, EnumString};
 
@@ -112,6 +114,17 @@ impl Conversion {
         }
     }
 
+    fn custom_value(setting: &Option<String>) -> Option<&str> {
+        match setting.as_deref() {
+            Some("auto") | None => None,
+            Some(value) => Some(value),
+        }
+    }
+
+    fn has_explicit_setting(settings: &[&Option<String>]) -> bool {
+        settings.iter().any(|setting| !Self::is_auto(setting))
+    }
+
     fn insert_codec_arg(args: &mut Vec<String>, flag: &str, codec: String) {
         if let Some(index) = args.iter().position(|arg| arg == flag) {
             if let Some(value) = args.get_mut(index + 1) {
@@ -217,22 +230,59 @@ impl Conversion {
         job: &super::job::Job,
         settings: &ConversionSettings,
     ) -> anyhow::Result<Vec<String>> {
-        let requires_video_encoding = [
+        let cap = FormatCap::for_format(self.to);
+
+        let auto_video_bitrate = Self::is_auto(&settings.video_bitrate);
+        let auto_fps = Self::is_auto(&settings.fps);
+        let auto_resolution = Self::is_auto(&settings.resolution);
+        let auto_audio_bitrate = Self::is_auto(&settings.audio_bitrate);
+        let auto_video_codec = Self::is_auto(&settings.video_codec);
+        let auto_audio_codec = Self::is_auto(&settings.audio_codec);
+        let auto_sample_rate = Self::is_auto(&settings.sample_rate);
+
+        let applied_cap = cap.as_ref().map(|cap| {
+            cap.apply(
+                bitrate,
+                fps,
+                resolution,
+                auto_video_bitrate,
+                auto_fps,
+                auto_resolution,
+                auto_audio_bitrate,
+                auto_sample_rate,
+            )
+        });
+
+        info!(
+            "applied cap for job {} (to {}): {:?}",
+            job.id,
+            self.to,
+            applied_cap
+        );
+
+        let effective_bitrate = applied_cap
+            .as_ref()
+            .map_or(bitrate, |applied| applied.bitrate);
+        let cap_args = applied_cap
+            .as_ref()
+            .map_or_else(Vec::new, |applied| applied.args.clone());
+
+        let requires_video_encoding = Self::has_explicit_setting(&[
             &settings.fps,
             &settings.resolution,
             &settings.video_codec,
             &settings.video_bitrate,
-        ]
-        .iter()
-        .any(|setting| setting.as_deref() != Some("auto") && setting.is_some());
+        ]) || applied_cap
+            .as_ref()
+            .is_some_and(|applied| applied.requires_video_encoding);
 
-        let requires_audio_encoding = [
+        let requires_audio_encoding = Self::has_explicit_setting(&[
             &settings.audio_bitrate,
             &settings.audio_codec,
             &settings.sample_rate,
-        ]
-        .iter()
-        .any(|setting| setting.as_deref() != Some("auto") && setting.is_some());
+        ]) || applied_cap
+            .as_ref()
+            .is_some_and(|applied| applied.requires_audio_encoding);
 
         let input_codecs = job
             .codecs()
@@ -325,24 +375,11 @@ impl Conversion {
                 ConverterFormat::SWF => vec![
                     "-f".to_string(),
                     "swf".to_string(),
-                    "-b:a".to_string(),
-                    "192k".to_string(),
                     "-strict".to_string(),
                     "experimental".to_string(),
                 ],
 
-                ConverterFormat::AMV => vec![
-                    "-ac".to_string(),
-                    "1".to_string(),
-                    "-ar".to_string(),
-                    "22050".to_string(),
-                    "-r".to_string(),
-                    "25".to_string(),
-                    "-block_size".to_string(),
-                    "882".to_string(),
-                    "-strict".to_string(),
-                    "experimental".to_string(),
-                ],
+                ConverterFormat::AMV => vec!["-strict".to_string(), "experimental".to_string()],
 
                 ConverterFormat::RM | ConverterFormat::RMVB => {
                     warn!(
@@ -368,13 +405,11 @@ impl Conversion {
         } else {
             [
                 extra_conversion_args,
-                self.to.conversion_into_args(speed, gpu, bitrate),
+                cap_args,
+                self.to.conversion_into_args(speed, gpu, effective_bitrate),
             ]
             .concat()
         };
-
-        let auto_video_codec = Self::is_auto(&settings.video_codec);
-        let auto_audio_codec = Self::is_auto(&settings.audio_codec);
 
         // auto video codec
         if auto_video_codec && !remux && !nvenc_path {
@@ -395,51 +430,39 @@ impl Conversion {
 
         // apply custom settings if provided and not "auto"
         // custom fps
-        if let Some(ref custom_fps) = settings.fps {
-            if custom_fps != "auto" {
-                if let Ok(fps_val) = custom_fps.parse::<u32>() {
-                    result.extend(["-r".to_string(), fps_val.to_string()]);
-                }
+        if let Some(custom_fps) = Self::custom_value(&settings.fps) {
+            if let Ok(fps_val) = custom_fps.parse::<u32>() {
+                result.extend(["-r".to_string(), fps_val.to_string()]);
             }
         }
 
         // custom resolution
-        if let Some(ref custom_res) = settings.resolution {
-            if custom_res != "auto" {
-                if let Some((w, h)) = custom_res.split_once('x') {
-                    if w.parse::<u32>().is_ok() && h.parse::<u32>().is_ok() {
-                        result.extend(["-vf".to_string(), format!("scale={}:{}", w, h)]);
-                    }
+        if let Some(custom_res) = Self::custom_value(&settings.resolution) {
+            if let Some((w, h)) = custom_res.split_once('x') {
+                if w.parse::<u32>().is_ok() && h.parse::<u32>().is_ok() {
+                    result.extend(["-vf".to_string(), format!("scale={}:{}", w, h)]);
                 }
             }
         }
 
         // custom audio bitrate
-        if let Some(ref audio_br) = settings.audio_bitrate {
-            if audio_br != "auto" {
-                result.extend(["-b:a".to_string(), audio_br.clone()]);
-            }
+        if let Some(audio_br) = Self::custom_value(&settings.audio_bitrate) {
+            result.extend(["-b:a".to_string(), audio_br.to_string()]);
         }
 
         // custom video codec
-        if let Some(ref video_codec) = settings.video_codec {
-            if video_codec != "auto" {
-                Self::insert_codec_arg(&mut result, "-c:v", video_codec.clone());
-            }
+        if let Some(video_codec) = Self::custom_value(&settings.video_codec) {
+            Self::insert_codec_arg(&mut result, "-c:v", video_codec.to_string());
         }
 
         // custom audio codec
-        if let Some(ref audio_codec) = settings.audio_codec {
-            if audio_codec != "auto" {
-                Self::insert_codec_arg(&mut result, "-c:a", audio_codec.clone());
-            }
+        if let Some(audio_codec) = Self::custom_value(&settings.audio_codec) {
+            Self::insert_codec_arg(&mut result, "-c:a", audio_codec.to_string());
         }
 
         // custom sample rate
-        if let Some(ref sample_r) = settings.sample_rate {
-            if sample_r != "auto" {
-                result.extend(["-ar".to_string(), sample_r.clone()]);
-            }
+        if let Some(sample_r) = Self::custom_value(&settings.sample_rate) {
+            result.extend(["-ar".to_string(), sample_r.to_string()]);
         }
 
         // for some weird case where there wasn't a specified audio codec?
