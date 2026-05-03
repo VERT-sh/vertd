@@ -239,6 +239,13 @@ impl Conversion {
         let auto_video_codec = Self::is_auto(&settings.video_codec);
         let auto_audio_codec = Self::is_auto(&settings.audio_codec);
         let auto_sample_rate = Self::is_auto(&settings.sample_rate);
+        let gif_width = Self::custom_value(&settings.resolution)
+            .and_then(|custom_resolution| {
+                custom_resolution
+                    .split_once('x')
+                    .and_then(|(width, _)| width.parse::<u32>().ok())
+            })
+            .unwrap_or(resolution.0);
 
         let applied_cap = cap.as_ref().map(|cap| {
             cap.apply(
@@ -255,9 +262,7 @@ impl Conversion {
 
         info!(
             "applied cap for job {} (to {}): {:?}",
-            job.id,
-            self.to,
-            applied_cap
+            job.id, self.to, applied_cap
         );
 
         let effective_bitrate = applied_cap
@@ -352,14 +357,16 @@ impl Conversion {
                     }
                 }
 
-                // TODO: see if these GIF args can be improved
                 ConverterFormat::GIF => {
                     vec![
-                        "-filter_complex".to_string(), 
+                        "-filter_complex".to_string(),
                         format!(
-                            "fps={},scale=800:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse=dither=bayer",
-                            fps.min(24)
+                            "fps={},scale={}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse=dither=bayer",
+                            fps.min(24),
+                            gif_width
                         ),
+                        "-loop".to_string(),
+                        "0".to_string(),
                         "-strict".to_string(),
                         "experimental".to_string(),
                     ]
@@ -437,10 +444,12 @@ impl Conversion {
         }
 
         // custom resolution
-        if let Some(custom_res) = Self::custom_value(&settings.resolution) {
-            if let Some((w, h)) = custom_res.split_once('x') {
-                if w.parse::<u32>().is_ok() && h.parse::<u32>().is_ok() {
-                    result.extend(["-vf".to_string(), format!("scale={}:{}", w, h)]);
+        if self.to != ConverterFormat::GIF {
+            if let Some(custom_res) = Self::custom_value(&settings.resolution) {
+                if let Some((w, h)) = custom_res.split_once('x') {
+                    if w.parse::<u32>().is_ok() && h.parse::<u32>().is_ok() {
+                        result.extend(["-vf".to_string(), format!("scale={}:{}", w, h)]);
+                    }
                 }
             }
         }
