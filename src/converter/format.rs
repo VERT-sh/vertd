@@ -246,6 +246,10 @@ impl Conversion {
                     .and_then(|(width, _)| width.parse::<u32>().ok())
             })
             .unwrap_or(resolution.0);
+        let gif_fps = Self::custom_value(&settings.fps)
+            .and_then(|custom_fps| custom_fps.parse::<u32>().ok())
+            .unwrap_or(fps)
+            .min(24);
 
         let applied_cap = cap.as_ref().map(|cap| {
             cap.apply(
@@ -362,7 +366,7 @@ impl Conversion {
                         "-filter_complex".to_string(),
                         format!(
                             "fps={},scale={}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse=dither=bayer",
-                            fps.min(24),
+                            gif_fps,
                             gif_width
                         ),
                         "-loop".to_string(),
