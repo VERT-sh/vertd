@@ -1,3 +1,9 @@
+# note: vert-windows is actually a linux machine
+# it is the same machine and environment as vert-linux
+# the only reason it exists is to allow for parallel
+# builds on the same machine, to massively boost build
+# times -- gh actions only allows 1 job per machine
+
 name: Build and Release
 
 on:
@@ -31,25 +37,18 @@ jobs:
           - os: macos-latest
             friendly-name: mac-x86_64
             target: x86_64-apple-darwin
-          # Linux (github-hosted)
-          - os: ubuntu-latest
+          # Linux (self-hosted)
+          - os: vert-linux
             friendly-name: linux-x86_64
             target: x86_64-unknown-linux-gnu
-          # Windows Cross-Compile on Linux (github-hosted)
-          - os: ubuntu-latest
+          # Windows (self-hosted)
+          - os: vert-windows
             friendly-name: windows-x86_64
             target: x86_64-pc-windows-gnu
             format: ".exe"
-            use-mingw: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install MinGW (for Windows target)
-        if: matrix.use-mingw
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-mingw-w64-x86-64
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -67,10 +66,10 @@ jobs:
 
   release:
     name: Publish release
-    needs: build
-    runs-on: ubuntu-latest
+    needs: build # wait for all builds to finish
+    runs-on: vert-linux
     permissions:
-      contents: write
+      contents: write # necessary for releases?
     steps:
       - name: Checkout
         uses: actions/checkout@v4
