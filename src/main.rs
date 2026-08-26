@@ -215,6 +215,6 @@ async fn main() -> anyhow::Result<()> {
     }
 // Read port from environment variable, defaulting to "8080" if not set
     let port = env::var("PORT").unwrap_or_else(|_| "8080".to_string());
-    start_http().await?;
+    start_http(&port).await?;
     Ok(())
 }
