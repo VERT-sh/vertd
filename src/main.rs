@@ -213,7 +213,8 @@ async fn main() -> anyhow::Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(e.into()),
     }
-
+// Read port from environment variable, defaulting to "8080" if not set
+    let port = env::var("PORT").unwrap_or_else(|_| "8080".to_string());
     start_http().await?;
     Ok(())
 }
