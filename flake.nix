@@ -37,6 +37,12 @@
         commonArgs = {
           inherit src;
           strictDeps = true;
+          nativeBuildInputs = [
+            pkgs.pkg-config
+          ];
+          buildInputs = [
+            pkgs.openssl
+          ];
         };
 
         craneLibLLvmTools = craneLib.overrideToolchain (
@@ -59,10 +65,8 @@
           // {
             inherit cargoArtifacts;
 
-            nativeBuildInputs = [
+            nativeBuildInputs = commonArgs.nativeBuildInputs ++ [
               pkgs.makeWrapper
-              pkgs.pkg-config
-              pkgs.openssl
             ];
 
             postFixup = ''
