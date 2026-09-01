@@ -6,7 +6,7 @@ COPY . .
 
 RUN cargo build --release
 
-FROM nvidia/cuda:12.8.0-base-ubuntu24.04
+FROM ubuntu:24.04
 
 WORKDIR /app
 
@@ -16,30 +16,28 @@ ENV XDG_RUNTIME_DIR="/tmp"
 ENV NVIDIA_VISIBLE_DEVICES="all"
 ENV NVIDIA_DRIVER_CAPABILITIES="all"
 
-COPY --from=builder /build/target/release/vertd ./vertd
-
+# nvidia-container-toolkit injects the driver libs (nvenc, cuda, vulkan) via
+# the env vars above, so a cuda base image would only add dead weight.
 # https://github.com/NVIDIA/nvidia-container-toolkit/issues/140#issuecomment-1927273909
 RUN apt-get update && \
-    apt-get install -y \
+    apt-get install -y --no-install-recommends \
     curl \
+    ca-certificates \
     ffmpeg \
     mesa-va-drivers \
+    libvulkan1 \
     libglvnd0 \
     libgl1 \
     libglx0 \
-    libegl1  \
-    libgles2  \
-    libxcb1-dev \
-    vulkan-tools \
-    mesa-utils && \
+    libegl1 \
+    libgles2 && \
     if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
-        apt-get install -y intel-media-va-driver; \
-    fi
+        apt-get install -y --no-install-recommends intel-media-va-driver; \
+    fi && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-RUN rm -rf \
-    /tmp/* \
-    /var/lib/apt/lists/* \
-    /var/tmp/*
+COPY --from=builder /build/target/release/vertd ./vertd
 
 EXPOSE 24153/tcp
 
