@@ -1,9 +1,7 @@
+use log::warn;
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 use uuid::Uuid;
-
-const DEFAULT_BITRATE: u64 = 4 * 1_000_000;
-const BITRATE_MULTIPLIER: f64 = 2.5;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,9 +49,7 @@ impl Job {
         self.state == JobState::Processing
     }
 
-    // TODO: scale based on resolution
     pub async fn bitrate(&mut self) -> anyhow::Result<u64> {
-        // Ok(DEFAULT_BITRATE)
         if let Some(bitrate) = self.bitrate {
             return Ok(bitrate);
         }
@@ -73,14 +69,24 @@ impl Job {
             .output()
             .await?;
 
-        let bitrate = String::from_utf8(output.stdout)?;
-        let bitrate = match bitrate.trim().parse::<u64>() {
-            Ok(bitrate) => bitrate,
-            Err(_) => DEFAULT_BITRATE,
+        // use detected bitrate
+        let bitrate = String::from_utf8(output.stdout)?.trim().parse::<u64>().ok();
+        if let Some(bitrate_value) = bitrate {
+            return Ok(bitrate_value);
+        }
+
+        // else check resolution and use default bitrate (based on resolution)
+        let (width, height) = self.resolution().await?;
+        let default_bitrate = match (width, height) {
+            (w, h) if w >= 3840 || h >= 2160 => 30_000_000, // 4K - 30 Mbps
+            (w, h) if w >= 2560 || h >= 1440 => 14_000_000, // 2K - 14 Mbps
+            (w, h) if w >= 1920 || h >= 1080 => 7_000_000,  // 1080p - 7 Mbps
+            (w, h) if w >= 1280 || h >= 720 => 4_000_000,   // 720p - 4 Mbps
+            _ => 1_500_000,                                 // SD - 1.5 Mbps
         };
 
-        self.bitrate = Some(bitrate);
-        Ok(((bitrate as f64) * BITRATE_MULTIPLIER) as u64)
+        self.bitrate = Some(default_bitrate);
+        Ok(default_bitrate)
     }
 
     pub async fn total_frames(&mut self) -> anyhow::Result<u64> {
@@ -125,6 +131,8 @@ impl Job {
             return Ok(fps);
         }
 
+        let path = format!("input/{}.{}", self.id, self.from);
+
         let output = Command::new("ffprobe")
             .args([
                 "-v",
@@ -135,32 +143,45 @@ impl Job {
                 "stream=r_frame_rate",
                 "-of",
                 "default=nokey=1:noprint_wrappers=1",
-                &format!("input/{}.{}", self.id, self.from),
+                &path,
             ])
             .output()
             .await?;
 
-        // its  gonna look like "30000/1001"
-        let fps = String::from_utf8(output.stdout)
-            .map_err(|e| anyhow::anyhow!("failed to parse fps: {}", e))?;
+        let fps_out = String::from_utf8(output.stdout)?;
+        let fps_trim = fps_out
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .map(|s| s.trim())
+            .unwrap_or("");
 
-        let fps = fps.trim().split('/').collect::<Vec<&str>>();
-        let fps = if fps.len() == 1 {
-            fps[0].parse::<u32>()?
-        } else if fps.len() == 2 {
-            let numerator = fps[0].parse::<u32>()?;
-            let denominator = fps[1].parse::<u32>()?;
-            (numerator as f64 / denominator as f64).round() as u32
-        } else if fps.len() == 3 {
-            let numerator = fps[0].parse::<u32>()?;
-            let denominator = fps[2].parse::<u32>()?;
-            (numerator as f64 / denominator as f64).round() as u32
+        if fps_trim.is_empty() {
+            warn!("ffprobe returned empty fps for {}", path);
+            let default = 30u32;
+            self.fps = Some(default);
+            return Ok(default);
+        }
+
+        // parse fps which could be in the form of "30", "29.97", or "30000/1001"
+        let parsed = if let Some((n_str, d_str)) = fps_trim.split_once('/') {
+            match (n_str.trim().parse::<f64>(), d_str.trim().parse::<f64>()) {
+                (Ok(n), Ok(d)) if d != 0.0 => Some((n / d).round() as u32),
+                _ => None,
+            }
         } else {
-            return Err(anyhow::anyhow!("failed to parse fps"));
+            fps_trim.parse::<f64>().ok().map(|f| f.round() as u32)
         };
 
-        self.fps = Some(fps);
-        Ok(fps)
+        let result = parsed.unwrap_or_else(|| {
+            warn!(
+                "failed to parse fps '{}' from ffprobe for {}",
+                fps_trim, path
+            );
+            30u32
+        });
+
+        self.fps = Some(result);
+        Ok(result)
     }
 
     pub async fn bitrate_and_fps(&mut self) -> anyhow::Result<(u64, u32)> {
@@ -186,15 +207,28 @@ impl Job {
             .output()
             .await?;
 
-        let res_str = String::from_utf8(output.stdout)?;
-        let mut parts = res_str.trim().split('x');
+        let res_out = String::from_utf8(output.stdout)?;
+        let res_str = res_out
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .map(|s| s.trim())
+            .ok_or_else(|| {
+                anyhow::anyhow!("failed to get resolution from ffprobe output: {}", res_out)
+            })?;
+        let mut parts = res_str.split('x');
         let width = parts
             .next()
-            .ok_or_else(|| anyhow::anyhow!("failed to get width"))?
+            .ok_or_else(|| {
+                anyhow::anyhow!("failed to get width from ffprobe output: '{}'", res_str)
+            })?
+            .trim()
             .parse::<u32>()?;
         let height = parts
             .next()
-            .ok_or_else(|| anyhow::anyhow!("failed to get height"))?
+            .ok_or_else(|| {
+                anyhow::anyhow!("failed to get height from ffprobe output: '{}'", res_str)
+            })?
+            .trim()
             .parse::<u32>()?;
 
         Ok((width, height))
@@ -218,13 +252,14 @@ impl Job {
             .output()
             .await?;
 
-        let pix_fmt = String::from_utf8(output.stdout)?
+        let pix_out = String::from_utf8(output.stdout)?;
+        let pix = pix_out
             .lines()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("failed to get pixel format"))?
-            .to_string();
+            .find(|l| !l.trim().is_empty())
+            .map(|s| s.trim().to_string())
+            .ok_or_else(|| anyhow::anyhow!("failed to get pixel format from ffprobe output"))?;
 
-        Ok(pix_fmt)
+        Ok(pix)
     }
 
     pub async fn codecs(&self) -> anyhow::Result<(String, String)> {
