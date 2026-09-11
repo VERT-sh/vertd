@@ -100,7 +100,11 @@ pub fn codec_support_for(
             &["prores", "dnxhd", "h264", "mpeg2video", "avc_intra", "jpeg2000"],
             &["pcm_s24le", "pcm_s16le", "pcm_s32le", "pcm_f32le", "pcm_f64le", "aac", "ac3"],
         )),
-        ConverterFormat::OGV => Some((
+        ConverterFormat::GXF => Some((
+            &["mpeg2video", "dvvideo", "mjpeg", "mpeg1video"],
+            &["pcm_s16le", "pcm_s24le", "ac3"]
+        )),
+        ConverterFormat::OGV | ConverterFormat::OGX => Some((
             &["theora", "vp8", "dirac"],
             &["libvorbis", "libopus", "flac", "speex", "pcm_s16le", "wavpack"],
         )),

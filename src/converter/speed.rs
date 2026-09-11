@@ -120,7 +120,7 @@ impl ConversionSpeed {
                 };
             }
 
-            ConverterFormat::OGV => {
+            ConverterFormat::OGV | ConverterFormat::OGX => {
                 args.push("-speed".to_string());
                 match self {
                     ConversionSpeed::UltraFast | ConversionSpeed::Fast => {
@@ -143,7 +143,8 @@ impl ConversionSpeed {
             | ConverterFormat::RMVB
             | ConverterFormat::SWF
             | ConverterFormat::AMV
-            | ConverterFormat::ASF => {
+            | ConverterFormat::ASF
+            | ConverterFormat::GXF => {
                 warn!("{:?} format does not support speed settings", to);
             }
         };

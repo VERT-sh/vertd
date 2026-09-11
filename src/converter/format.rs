@@ -32,7 +32,9 @@ pub enum ConverterFormat {
     #[strum(serialize = "3g2")]
     ThreeG2,
     MXF,
+    GXF,
     OGV,
+    OGX,
     RM,
     RMVB,
     H264,
