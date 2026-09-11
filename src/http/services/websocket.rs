@@ -76,7 +76,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         message: format!("failed to parse message: {}", e),
                     }
                     .into();
-                    session.text(message).await.unwrap();
+                    let _ = session.text(message).await;
                     continue;
                 }
             };
@@ -99,7 +99,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                 message: "job already completed".to_string(),
                             }
                             .into();
-                            session.text(message).await.unwrap();
+                            let _ = session.text(message).await;
                             continue;
                         }
                         job.to = Some(to.clone());
@@ -110,7 +110,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         message: "job not found".to_string(),
                     }
                     .into();
-                    session.text(message).await.unwrap();
+                    let _ = session.text(message).await;
                     continue;
                 };
 
@@ -119,7 +119,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         message: "invalid token".to_string(),
                     }
                     .into();
-                    session.text(message).await.unwrap();
+                    let _ = session.text(message).await;
                     continue;
                 }
 
@@ -128,7 +128,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         message: "invalid input format".to_string(),
                     }
                     .into();
-                    session.text(message).await.unwrap();
+                    let _ = session.text(message).await;
                     continue;
                 };
 
@@ -137,7 +137,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         message: "invalid output format".to_string(),
                     }
                     .into();
-                    session.text(message).await.unwrap();
+                    let _ = session.text(message).await;
                     continue;
                 };
 
@@ -156,7 +156,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     Ok(gpu) => gpu,
                     Err(msg) => {
                         let message: String = Message::Error { message: msg }.into();
-                        session.text(message).await.unwrap();
+                        let _ = session.text(message).await;
                         continue;
                     }
                 };
@@ -171,7 +171,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                             message: format!("failed to convert: {}", e),
                         }
                         .into();
-                        session.text(message).await.unwrap();
+                        let _ = session.text(message).await;
                         continue;
                     }
                 };
@@ -195,7 +195,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                 }
                                 Some(progress) => {
                                     let message: String = Message::ProgressUpdate(progress).into();
-                                    session.text(message).await.unwrap();
+                                    let _ = session.text(message).await;
                                 }
                                 None => {
                                     // conversion finished
@@ -227,7 +227,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                             drop(app_state);
 
                                             let message: String = Message::JobCancelled { job_id }.into();
-                                            session.text(message).await.unwrap();
+                                            let _ = session.text(message).await;
 
                                             break;
                                         } else {
@@ -235,7 +235,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                                 message: "invalid token or job id for cancellation".to_string(),
                                             }
                                             .into();
-                                            session.text(message).await.unwrap();
+                                            let _ = session.text(message).await;
                                         }
                                     }
                                 }
@@ -302,7 +302,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         message: error_message,
                     }
                     .into();
-                    session.text(message).await.unwrap();
+                    let _ = session.text(message).await;
 
                     let from = job.from.clone();
                     let to = to.to_string().to_string();
@@ -315,7 +315,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     });
                 } else {
                     let message: String = Message::JobFinished { job_id }.into();
-                    session.text(message).await.unwrap();
+                    let _ = session.text(message).await;
                 }
 
                 tokio::spawn(async move {

@@ -103,7 +103,9 @@ impl Converter {
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 error!("{}", line);
-                tx.send(ProgressUpdate::Error(line)).await.unwrap();
+                if tx.send(ProgressUpdate::Error(line)).await.is_err() {
+                    break;
+                }
             }
         });
 
