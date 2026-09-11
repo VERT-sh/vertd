@@ -166,9 +166,7 @@ impl FormatCap {
 
     fn scale_filter(&self, resolution: (u32, u32)) -> Option<String> {
         let (input_width, input_height) = resolution;
-        let Some((max_width, max_height)) = self.resolution else {
-            return None;
-        };
+        let (max_width, max_height) = self.resolution?;
 
         if input_width <= max_width && input_height <= max_height {
             return None;

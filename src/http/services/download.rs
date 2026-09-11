@@ -76,12 +76,10 @@ pub async fn download(path: web::Path<(String, String)>) -> Result<impl Responde
             return Err(DownloadError::InvalidToken);
         }
 
-        let file_path = match job.to {
+        match job.to {
             Some(to) => format!("output/{id}.{to}"),
             None => return Err(DownloadError::IncompleteHandshake),
-        };
-
-        file_path
+        }
     };
 
     let file = fs::File::open(&file_path).await.map_err(|e| {

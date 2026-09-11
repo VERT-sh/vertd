@@ -206,8 +206,7 @@ async fn main() -> anyhow::Result<()> {
             #[cfg(target_os = "linux")]
             if matches!(gpu, ConverterGPU::AMD | ConverterGPU::Intel) {
                 let device_path = vaapi_device_path
-                    .as_ref()
-                    .map(|s| s.as_str())
+                    .as_deref()
                     .unwrap_or("/dev/dri/renderD128");
                 info!("using VA-API device path: {}", device_path);
             }

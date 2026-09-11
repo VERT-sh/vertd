@@ -302,27 +302,25 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
 
                             new_message = stream.next() => {
                                 if let Some(Ok(AggregatedMessage::Text(text))) = new_message {
-                                    if let Ok(parsed_message) = serde_json::from_str::<Message>(&text) {
-                                        if let Message::CancelJob { token: cancel_token, job_id: cancel_job_id } = parsed_message {
-                                            if cancel_job_id == job_id && cancel_token == token {
-                                                log::info!("cancelling job {}", job_id);
-                                                job_cancelled = true;
+                                    if let Ok(Message::CancelJob { token: cancel_token, job_id: cancel_job_id }) = serde_json::from_str::<Message>(&text) {
+                                        if cancel_job_id == job_id && cancel_token == token {
+                                            log::info!("cancelling job {}", job_id);
+                                            job_cancelled = true;
 
-                                                if !send_ws_message(&mut session, Message::JobCancelled { job_id }).await {
-                                                    break 'conversion;
-                                                }
-
-                                                break;
-                                            } else if !send_ws_message(
-                                                &mut session,
-                                                Message::Error {
-                                                    message: "invalid token or job id for cancellation".to_string(),
-                                                },
-                                            )
-                                            .await
-                                            {
+                                            if !send_ws_message(&mut session, Message::JobCancelled { job_id }).await {
                                                 break 'conversion;
                                             }
+
+                                            break;
+                                        } else if !send_ws_message(
+                                            &mut session,
+                                            Message::Error {
+                                                message: "invalid token or job id for cancellation".to_string(),
+                                            },
+                                        )
+                                        .await
+                                        {
+                                            break 'conversion;
                                         }
                                     }
                                 } else if new_message.is_none() {

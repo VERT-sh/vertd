@@ -87,7 +87,11 @@ impl Job {
             .output()
             .await?;
 
-        validate_ffprobe_output(&output, &format!("input/{}.{}", self.id, self.from), "reading bitrate")?;
+        validate_ffprobe_output(
+            &output,
+            &format!("input/{}.{}", self.id, self.from),
+            "reading bitrate",
+        )?;
 
         // use detected bitrate
         let bitrate = String::from_utf8(output.stdout)?.trim().parse::<u64>().ok();
