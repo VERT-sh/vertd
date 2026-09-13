@@ -60,7 +60,7 @@ impl FormatCap {
                 fps: Some(30),
                 audio_bitrate: Some(128_000),
                 audio_sample_rate: Some(44_100),
-                audio_channels: None,
+                audio_channels: Some(2),
                 dynamic_audio_block_size: false,
                 extra_args: &[],
             }),

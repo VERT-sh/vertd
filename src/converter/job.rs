@@ -93,13 +93,7 @@ impl Job {
             "reading bitrate",
         )?;
 
-        // use detected bitrate
-        let bitrate = String::from_utf8(output.stdout)?.trim().parse::<u64>().ok();
-        if let Some(bitrate_value) = bitrate {
-            return Ok(bitrate_value);
-        }
-
-        // else check resolution and use default bitrate (based on resolution)
+        // use the detected bitrate unless it exceeds the resolution-based default
         let (width, height) = self.resolution().await?;
         let default_bitrate = match (width, height) {
             (w, h) if w >= 3840 || h >= 2160 => 30_000_000, // >4K - 30 Mbps
@@ -108,6 +102,20 @@ impl Job {
             (w, h) if w >= 1280 || h >= 720 => 4_000_000,   // >720p - 4 Mbps
             _ => 1_500_000,                                 // <SD - 1.5 Mbps
         };
+
+        let bitrate = String::from_utf8(output.stdout)?.trim().parse::<u64>().ok();
+        if let Some(bitrate_value) = bitrate {
+            let bitrate = bitrate_value.min(default_bitrate);
+            self.bitrate = Some(bitrate);
+
+            if bitrate_value > default_bitrate {
+                warn!(
+                    "detected bitrate {} exceeds default for resolution {}x{}, using default {}",
+                    bitrate_value, width, height, default_bitrate
+                );
+            }
+            return Ok(bitrate);
+        }
 
         self.bitrate = Some(default_bitrate);
         Ok(default_bitrate)

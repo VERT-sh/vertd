@@ -46,6 +46,15 @@ pub enum ConverterFormat {
 }
 
 impl ConverterFormat {
+    pub fn output_format_args(&self) -> &'static [&'static str] {
+        match self {
+            // need to tell ffmpeg .ogx is a ogg format or it'll fail
+            Self::OGX => &["-f", "ogg"],
+            Self::DIVX => &["-f", "avi"],
+            _ => &[],
+        }
+    }
+
     pub fn conversion_into_args(
         &self,
         speed: &ConversionSpeed,
@@ -536,6 +545,8 @@ impl Conversion {
                 ]);
             }
         }
+
+        args.extend(["-strict".to_string(), "experimental".to_string()]);
 
         info!("performing remux for job {}", job.id);
 

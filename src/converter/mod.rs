@@ -115,6 +115,7 @@ impl Converter {
             &["-i", &input_filename][..],
             args,
             metadata_args,
+            self.conversion.to.output_format_args(),
             &[output_filename.as_str()][..],
         ]
         .concat();

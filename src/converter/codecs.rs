@@ -86,7 +86,7 @@ pub fn codec_support_for(
         )),
         ConverterFormat::M4V => Some((
             &["h264", "mpeg4"],
-            &["aac", "ac3", "alac", "mp3", "flac", "libopus", "pcm_s16le"],
+            &["aac", "ac3", "alac", "flac"],
         )),
         ConverterFormat::ThreeGP => Some((
             &["h264", "mpeg4", "h263"],
@@ -105,8 +105,8 @@ pub fn codec_support_for(
             &["pcm_s16le", "pcm_s24le", "ac3"]
         )),
         ConverterFormat::OGV | ConverterFormat::OGX => Some((
-            &["theora", "vp8", "dirac"],
-            &["libvorbis", "libopus", "flac", "speex", "pcm_s16le", "wavpack"],
+            &["theora", "vp8"],
+            &["libvorbis", "libopus", "flac", "speex"],
         )),
         ConverterFormat::SWF => Some((
             &["flv1", "flashsv", "mjpeg"],
