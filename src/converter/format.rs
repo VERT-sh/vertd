@@ -149,6 +149,18 @@ impl Conversion {
         args.extend([flag.to_string(), codec]);
     }
 
+    fn append_video_filter(args: &mut Vec<String>, filter: &str) {
+        if let Some(index) = args.iter().position(|arg| arg == "-vf") {
+            if let Some(value) = args.get_mut(index + 1) {
+                value.push(',');
+                value.push_str(filter);
+                return;
+            }
+        }
+
+        args.extend(["-vf".to_string(), filter.to_string()]);
+    }
+
     async fn preferred_video_encoder(
         &self,
         gpu: &ConverterGPU,
@@ -308,6 +320,7 @@ impl Conversion {
             .codecs()
             .await
             .unwrap_or_else(|_| ("unknown".to_string(), "unknown".to_string()));
+        let input_pix_fmt = job.pix_fmt().await.unwrap_or_default();
         let input_video_codec = input_codecs.0.to_lowercase();
         let input_audio_codec = input_codecs.1.to_lowercase();
 
@@ -493,6 +506,15 @@ impl Conversion {
         // don't actually remember what this was for
         if !result.contains(&"-c:a".to_string()) {
             result.extend(["-c:a".to_string(), "aac".to_string()]);
+        }
+
+        if input_pix_fmt.contains('a')
+            && !matches!(self.to, ConverterFormat::GIF | ConverterFormat::WEBP | ConverterFormat::APNG)
+        {
+            Self::append_video_filter(
+                &mut result,
+                "format=rgba,geq=r='r(X,Y)*alpha(X,Y)/255':g='g(X,Y)*alpha(X,Y)/255':b='b(X,Y)*alpha(X,Y)/255':a=255,format=yuv420p",
+            );
         }
 
         Ok(result)
