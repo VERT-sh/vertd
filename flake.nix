@@ -31,7 +31,16 @@
 
         inherit (pkgs) lib;
 
-        craneLib = crane.mkLib pkgs;
+        rustToolchain = fenix.packages.${system}.complete.withComponents [
+          "cargo"
+          "clippy"
+          "rust-analyzer"
+          "rust-src"
+          "rustc"
+          "rustfmt"
+        ];
+
+        craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
         src = craneLib.cleanCargoSource ./.;
 
         commonArgs = {
@@ -102,6 +111,8 @@
             pkgs.pkg-config
             pkgs.openssl
           ];
+
+          RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
         };
       }
     ))
@@ -156,7 +167,7 @@
                 ExecStart = lib.getExe self.packages.${pkgs.system}.default;
                 StateDirectory = "vertd";
                 WorkingDirectory = "/var/lib/vertd";
-                Environment = "PORT=${builtins.toString cfg.port}";
+                Environment = "PORT=${toString cfg.port}";
               };
             };
           };
