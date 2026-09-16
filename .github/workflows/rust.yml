@@ -31,18 +31,18 @@ jobs:
       matrix:
         include:
           # macOS (github-hosted)
-          - os: macos-latest
+          - os: blacksmith-6vcpu-macos-15
             friendly-name: mac-arm64
             target: aarch64-apple-darwin
-          - os: macos-latest
+          - os: blacksmith-6vcpu-macos-15
             friendly-name: mac-x86_64
             target: x86_64-apple-darwin
           # Linux (self-hosted)
-          - os: vert-linux
+          - os: blacksmith-4vcpu-ubuntu-2404
             friendly-name: linux-x86_64
             target: x86_64-unknown-linux-gnu
           # Windows (self-hosted)
-          - os: vert-windows
+          - os: blacksmith-4vcpu-windows-2025
             friendly-name: windows-x86_64
             target: x86_64-pc-windows-gnu
             format: ".exe"
@@ -67,7 +67,7 @@ jobs:
   release:
     name: Publish release
     needs: build # wait for all builds to finish
-    runs-on: vert-linux
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write # necessary for releases?
     steps:

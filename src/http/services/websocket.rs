@@ -255,6 +255,8 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         {
                             break;
                         }
+                        .into();
+                        let _ = session.text(message).await;
 
                         continue;
                     }
