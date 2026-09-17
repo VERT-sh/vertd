@@ -197,7 +197,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                 // determine speed - vertdspeedslider is 0-5, from very slow to very fast
                 // but if bitrate is set, ignore speed slider
                 let speed = match settings.video_bitrate.as_deref() {
-                    Some("auto") | None => {
+                    Some("") | Some("auto") | None => {
                         match settings.vertd_speed {
                             Some(0) => ConversionSpeed::VerySlow,
                             Some(1) => ConversionSpeed::Slower,
@@ -255,8 +255,6 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         {
                             break;
                         }
-                        .into();
-                        let _ = session.text(message).await;
 
                         continue;
                     }

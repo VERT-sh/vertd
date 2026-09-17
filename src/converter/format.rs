@@ -1,7 +1,7 @@
 use crate::converter::job::Job;
 
 use super::{
-    cap::FormatCap, codecs, gpu::ConverterGPU, speed::ConversionSpeed, ConversionSettings,
+    constraint::FormatConstraint, codecs, gpu::ConverterGPU, speed::ConversionSpeed, ConversionSettings,
 };
 use log::{info, warn};
 use strum_macros::{Display, EnumIter, EnumString};
@@ -119,17 +119,16 @@ impl Conversion {
 
     fn is_auto(setting: &Option<String>) -> bool {
         match setting.as_deref() {
-            None => true,
-            Some("auto") => true,
+            None | Some("") | Some("auto") => true,
             Some(_) => false,
         }
     }
 
-    fn custom_value(setting: &Option<String>) -> Option<&str> {
-        match setting.as_deref() {
-            Some("auto") | None => None,
-            Some(value) => Some(value),
-        }
+    fn custom_value<T: ToString>(setting: &Option<T>) -> Option<String> {
+        setting.as_ref().and_then(|value| {
+            let value = value.to_string();
+            (!value.is_empty() && value != "auto").then_some(value)
+        })
     }
 
     fn has_explicit_setting(settings: &[&Option<String>]) -> bool {
@@ -253,7 +252,7 @@ impl Conversion {
         job: &super::job::Job,
         settings: &ConversionSettings,
     ) -> anyhow::Result<Vec<String>> {
-        let cap = FormatCap::for_format(self.to);
+        let cap = FormatConstraint::for_format(self.to);
 
         let auto_video_bitrate = Self::is_auto(&settings.video_bitrate);
         let auto_fps = Self::is_auto(&settings.fps);
@@ -440,7 +439,6 @@ impl Conversion {
         } else {
             [
                 extra_conversion_args,
-                cap_args,
                 self.to.conversion_into_args(speed, gpu, effective_bitrate),
             ]
             .concat()
@@ -487,6 +485,10 @@ impl Conversion {
             result.extend(["-b:a".to_string(), audio_br.to_string()]);
         }
 
+        if let Some(audio_ch) = Self::custom_value(&settings.audio_channels) {
+            result.extend(["-ac".to_string(), audio_ch.to_string()]);
+        }
+
         // custom video codec
         if let Some(video_codec) = Self::custom_value(&settings.video_codec) {
             Self::insert_codec_arg(&mut result, "-c:v", video_codec.to_string());
@@ -502,6 +504,10 @@ impl Conversion {
             result.extend(["-ar".to_string(), sample_r.to_string()]);
         }
 
+        if !remux {
+            result.extend(cap_args);
+        }
+
         // for some weird case where there wasn't a specified audio codec?
         // don't actually remember what this was for
         if !result.contains(&"-c:a".to_string()) {
@@ -509,7 +515,10 @@ impl Conversion {
         }
 
         if input_pix_fmt.contains('a')
-            && !matches!(self.to, ConverterFormat::GIF | ConverterFormat::WEBP | ConverterFormat::APNG)
+            && !matches!(
+                self.to,
+                ConverterFormat::GIF | ConverterFormat::WEBP | ConverterFormat::APNG
+            )
         {
             Self::append_video_filter(
                 &mut result,

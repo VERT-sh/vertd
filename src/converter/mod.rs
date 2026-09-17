@@ -13,7 +13,7 @@ use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
-pub mod cap;
+pub mod constraint;
 pub mod codecs;
 pub mod format;
 pub mod gpu;
@@ -31,6 +31,7 @@ pub struct ConversionSettings {
     pub video_bitrate: Option<String>,
     pub audio_codec: Option<String>,
     pub audio_bitrate: Option<String>,
+    pub audio_channels: Option<u8>, // in ui, it is an integer rather than string
     pub sample_rate: Option<String>,
 }
 
