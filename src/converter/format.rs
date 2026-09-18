@@ -1,7 +1,8 @@
 use crate::converter::job::Job;
 
 use super::{
-    constraint::FormatConstraint, codecs, gpu::ConverterGPU, speed::ConversionSpeed, ConversionSettings,
+    codecs, constraint::FormatConstraint, gpu::ConverterGPU, speed::ConversionSpeed,
+    ConversionSettings,
 };
 use log::{info, warn};
 use strum_macros::{Display, EnumIter, EnumString};
@@ -46,11 +47,19 @@ pub enum ConverterFormat {
 }
 
 impl ConverterFormat {
+    pub fn input_format_args(&self) -> &'static [&'static str] {
+        match self {
+            Self::MTS => &["-fflags", "+genpts"],
+            _ => &[],
+        }
+    }
+
     pub fn output_format_args(&self) -> &'static [&'static str] {
         match self {
             // need to tell ffmpeg .ogx is a ogg format or it'll fail
             Self::OGX => &["-f", "ogg"],
             Self::DIVX => &["-f", "avi"],
+            Self::MXF => &["-timecode", "00:00:00:00"],
             _ => &[],
         }
     }
@@ -322,6 +331,7 @@ impl Conversion {
         let input_pix_fmt = job.pix_fmt().await.unwrap_or_default();
         let input_video_codec = input_codecs.0.to_lowercase();
         let input_audio_codec = input_codecs.1.to_lowercase();
+        let has_usable_audio = !matches!(input_audio_codec.as_str(), "none" | "unknown");
 
         let supports_remux = codecs::codec_support_for(self.from).is_some()
             && codecs::codec_support_for(self.to).is_some();
@@ -333,7 +343,7 @@ impl Conversion {
 
         let can_remux_audio = supports_remux
             && !requires_audio_encoding
-            && input_audio_codec != "none"
+            && has_usable_audio
             && codecs::support_audio_codec(self.from, &input_audio_codec)
             && codecs::support_audio_codec(self.to, &input_audio_codec);
 
@@ -388,10 +398,12 @@ impl Conversion {
                     vec![
                         "-filter_complex".to_string(),
                         format!(
-                            "fps={},scale={}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse=dither=bayer",
+                            "[0:v:0]fps={},scale={}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse=dither=bayer[gif]",
                             gif_fps,
                             gif_width
                         ),
+                        "-map".to_string(),
+                        "[gif]".to_string(),
                         "-loop".to_string(),
                         "0".to_string(),
                         "-strict".to_string(),
@@ -413,7 +425,34 @@ impl Conversion {
                     "experimental".to_string(),
                 ],
 
-                ConverterFormat::AMV => vec!["-strict".to_string(), "experimental".to_string()],
+                // amv only supports two tracks - 1 video and 1 audio
+                // ignore extra tracks, and if no audio track, add silent audio track
+                ConverterFormat::AMV => {
+                    if !has_usable_audio {
+                        vec![
+                            "-f".to_string(),
+                            "lavfi".to_string(),
+                            "-i".to_string(),
+                            "anullsrc=channel_layout=mono:sample_rate=22050".to_string(),
+                            "-map".to_string(),
+                            "0:v:0".to_string(),
+                            "-map".to_string(),
+                            "1:a:0".to_string(),
+                            "-shortest".to_string(),
+                            "-strict".to_string(),
+                            "experimental".to_string(),
+                        ]
+                    } else {
+                        vec![
+                            "-map".to_string(),
+                            "0:v:0".to_string(),
+                            "-map".to_string(),
+                            "0:a:0".to_string(),
+                            "-strict".to_string(),
+                            "experimental".to_string(),
+                        ]
+                    }
+                }
 
                 ConverterFormat::RM | ConverterFormat::RMVB => {
                     warn!(
@@ -444,6 +483,13 @@ impl Conversion {
             .concat()
         };
 
+        if !remux
+            && !has_usable_audio
+            && !matches!(self.to, ConverterFormat::AMV | ConverterFormat::GIF)
+        {
+            result.extend(["-map".to_string(), "0:v:0".to_string()]);
+        }
+
         // auto video codec
         if auto_video_codec && !remux && !nvenc_path {
             if let Some(preferred_video_encoder) = self
@@ -455,7 +501,7 @@ impl Conversion {
         }
 
         // auto audio codec
-        if auto_audio_codec && !remux {
+        if auto_audio_codec && !remux && self.to != ConverterFormat::GIF {
             if let Some(preferred_audio_encoder) = self.preferred_audio_encoder() {
                 Self::insert_codec_arg(&mut result, "-c:a", preferred_audio_encoder);
             }
@@ -485,6 +531,7 @@ impl Conversion {
             result.extend(["-b:a".to_string(), audio_br.to_string()]);
         }
 
+        // custom audio channels
         if let Some(audio_ch) = Self::custom_value(&settings.audio_channels) {
             result.extend(["-ac".to_string(), audio_ch.to_string()]);
         }
@@ -510,7 +557,7 @@ impl Conversion {
 
         // for some weird case where there wasn't a specified audio codec?
         // don't actually remember what this was for
-        if !result.contains(&"-c:a".to_string()) {
+        if self.to != ConverterFormat::GIF && !result.contains(&"-c:a".to_string()) {
             result.extend(["-c:a".to_string(), "aac".to_string()]);
         }
 
@@ -526,6 +573,13 @@ impl Conversion {
             );
         }
 
+        if !has_usable_audio {
+            info!(
+                "job {} has no usable audio track, or has malformed metadata",
+                job.id
+            );
+        }
+
         Ok(result)
     }
 
@@ -537,6 +591,15 @@ impl Conversion {
         remux: &[String],
     ) -> Vec<String> {
         let mut args = vec!["-c".to_string(), "copy".to_string()];
+        if self.to == ConverterFormat::MTS {
+            args.extend(["-avoid_negative_ts".to_string(), "make_zero".to_string()]);
+        }
+        if remux.contains(&"video".to_string()) {
+            args.extend(["-map".to_string(), "0:v:0".to_string()]);
+        }
+        if remux.contains(&"audio".to_string()) {
+            args.extend(["-map".to_string(), "0:a?".to_string()]);
+        }
         let codecs = job
             .codecs()
             .await
@@ -568,7 +631,7 @@ impl Conversion {
 
         if remux_audio {
             args.extend(["-c:a".to_string(), "copy".to_string()]);
-        } else if audio_codec != "none" {
+        } else if audio_codec != "none" || audio_codec != "unknown" {
             if let Some(preferred_audio_codec) = supported_audio_codecs.first() {
                 args.extend([
                     "-c:a".to_string(),

@@ -140,7 +140,7 @@ impl FormatConstraint {
             if let Some(constraint) = self.fps {
                 let should_adjust = match constraint {
                     Constraint::Cap(target) => original_fps > target,
-                    Constraint::Exact(target) => original_fps != target,
+                    Constraint::Exact(_) => true,
                 };
                 if should_adjust {
                     let target = match constraint {

@@ -126,7 +126,7 @@ pub fn codec_support_for(
         )),
         ConverterFormat::H264 => Some((
             &["h264"],
-            &["aac", "mp3", "ac3", "eac3", "libopus", "alac", "flac", "pcm_s16le"],
+            &[],
         )),
         ConverterFormat::DIVX => Some((
             &["mpeg4", "h264", "hevc"],
