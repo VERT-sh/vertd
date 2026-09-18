@@ -117,6 +117,7 @@
           ];
 
           RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
+          RUSTFLAGS = "-C link-arg=-Wl,-rpath,${lib.makeLibraryPath [ pkgs.openssl pkgs.libGL ]}";
         };
       }
     ))
