@@ -2696,6 +2696,7 @@ dependencies = [
  "rbtag",
  "serde",
  "serde_json",
+ "socket2",
  "strum 0.27.1",
  "strum_macros 0.27.1",
  "thiserror 2.0.11",
