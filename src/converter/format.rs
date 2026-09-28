@@ -49,7 +49,7 @@ pub enum ConverterFormat {
 impl ConverterFormat {
     pub fn input_format_args(&self) -> &'static [&'static str] {
         match self {
-            Self::MTS => &["-fflags", "+genpts"],
+            Self::MTS | Self::TS => &["-fflags", "+genpts"],
             _ => &[],
         }
     }
@@ -217,8 +217,10 @@ impl Conversion {
         let has_h265 = codecs.0.to_lowercase().contains("hevc");
         let has_h264 = codecs.0.to_lowercase().contains("h264");
         let is_10bit = pix_fmt.contains("10le") || pix_fmt.contains("10be");
-        let (codec_order, default) = if has_h265 || (has_h264 && (is_10bit || is_4k || is_above_4k))
-        {
+        let target_supports_hevc = codecs::support_video_codec(self.to, "hevc");
+        let use_hevc = target_supports_hevc
+            && (has_h265 || (has_h264 && (is_10bit || is_4k || is_above_4k)));
+        let (codec_order, default) = if use_hevc {
             (&["hevc"][..], "libx265")
         } else {
             (&["h264"][..], "libx264")
@@ -560,6 +562,18 @@ impl Conversion {
         if self.to != ConverterFormat::GIF && !result.contains(&"-c:a".to_string()) {
             result.extend(["-c:a".to_string(), "aac".to_string()]);
         }
+        // webm + opus needs to be stereo
+        // "Invalid channel layout 4.0 for specified mapping family"
+        let uses_opus = result
+            .windows(2)
+            .any(|args| args[0] == "-c:a" && matches!(args[1].as_str(), "opus" | "libopus"));
+        if !remux
+            && self.to == ConverterFormat::WebM
+            && uses_opus
+            && settings.audio_channels.is_none()
+        {
+            result.extend(["-ac".to_string(), "2".to_string()]);
+        }
 
         if input_pix_fmt.contains('a')
             && !matches!(
@@ -591,7 +605,7 @@ impl Conversion {
         remux: &[String],
     ) -> Vec<String> {
         let mut args = vec!["-c".to_string(), "copy".to_string()];
-        if self.to == ConverterFormat::MTS {
+        if matches!(self.to, ConverterFormat::MTS | ConverterFormat::TS) {
             args.extend(["-avoid_negative_ts".to_string(), "make_zero".to_string()]);
         }
         if remux.contains(&"video".to_string()) {
