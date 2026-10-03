@@ -34,6 +34,13 @@ pub struct Job {
     fps: Option<u32>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct AudioStream {
+    pub index: u32,
+    #[serde(default)]
+    pub codec_name: String,
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 pub enum JobState {
     Processing,
@@ -315,6 +322,34 @@ impl Job {
         Ok(pix)
     }
 
+    pub async fn audio_streams(&self) -> anyhow::Result<Vec<AudioStream>> {
+        #[derive(Deserialize)]
+        struct Probe {
+            streams: Vec<AudioStream>,
+        }
+
+        let path = format!("input/{}.{}", self.id, self.from);
+        let output = Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "a",
+                "-show_entries",
+                "stream=index,codec_name",
+                "-of",
+                "json",
+                &path,
+            ])
+            .output()
+            .await?;
+        validate_ffprobe_output(&output, &path, "reading all audio streams")?;
+        let probe: Probe = serde_json::from_slice(&output.stdout).map_err(|error| {
+            anyhow::anyhow!("invalid audio stream metadata for {}: {}", path, error)
+        })?;
+        Ok(probe.streams)
+    }
+
     // codecs.0 = video codec, codecs.1 = audio codec
     pub async fn codecs(&self) -> anyhow::Result<(String, String)> {
         let path = format!("input/{}.{}", self.id, self.from);
@@ -344,28 +379,12 @@ impl Job {
             .to_string();
 
         // Audio codec
-        let output = Command::new("ffprobe")
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "a:0",
-                "-show_entries",
-                "stream=codec_name",
-                "-of",
-                "default=nokey=1:noprint_wrappers=1",
-                &path,
-            ])
-            .output()
-            .await?;
-
-        validate_ffprobe_output(&output, &path, "reading audio codec")?;
-
-        let audio_codec = String::from_utf8(output.stdout)?
-            .lines()
+        let audio_codec = self
+            .audio_streams()
+            .await?
+            .into_iter()
             .next()
-            .unwrap_or("none")
-            .to_string();
+            .map_or_else(|| "none".to_string(), |stream| stream.codec_name);
 
         Ok((video_codec, audio_codec))
     }

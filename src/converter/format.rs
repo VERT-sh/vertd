@@ -63,15 +63,6 @@ impl ConverterFormat {
             _ => &[],
         }
     }
-
-    pub fn conversion_into_args(
-        &self,
-        speed: &ConversionSpeed,
-        gpu: &ConverterGPU,
-        bitrate: u64,
-    ) -> Vec<String> {
-        speed.to_args(self, gpu, bitrate)
-    }
 }
 
 pub struct Conversion {
@@ -93,10 +84,7 @@ impl Conversion {
     ) -> String {
         for codec in codecs {
             // try all codecs in order and use first supported, else fallback to default
-            if supported_accelerated_codecs
-                .iter()
-                .any(|c| c == *codec)
-            {
+            if supported_accelerated_codecs.iter().any(|c| c == *codec) {
                 return gpu
                     .get_accelerated_codec(codec)
                     .await
@@ -231,8 +219,8 @@ impl Conversion {
         let has_h264 = codecs.0.to_lowercase().contains("h264");
         let is_10bit = pix_fmt.contains("10le") || pix_fmt.contains("10be");
         let target_supports_hevc = codecs::support_video_codec(self.to, "hevc");
-        let use_hevc = target_supports_hevc
-            && (has_h265 || (has_h264 && (is_10bit || is_4k || is_above_4k)));
+        let use_hevc =
+            target_supports_hevc && (has_h265 || (has_h264 && (is_10bit || is_4k || is_above_4k)));
         let (codec_order, default) = if use_hevc {
             (&["hevc"][..], "libx265")
         } else {
@@ -255,9 +243,9 @@ impl Conversion {
             args.extend(["-r".to_string(), "240".to_string()]);
         }
 
-        // scale to 160:-1 if width is less than 160
+        // scale to 160:-2 if width is less than 160
         if width < 160 {
-            args.extend(["-vf".to_string(), "scale=160:-1".to_string()]);
+            args.extend(["-vf".to_string(), "scale=160:-2".to_string()]);
         }
 
         args.extend(["-strict".to_string(), "experimental".to_string()]);
@@ -276,15 +264,28 @@ impl Conversion {
         job: &super::job::Job,
         settings: &ConversionSettings,
     ) -> anyhow::Result<Vec<String>> {
-        let cap = FormatConstraint::for_format(self.to);
         settings.validate()?;
+        let audio_codec = Self::custom_value(&settings.audio_codec)
+            .or_else(|| self.preferred_audio_encoder())
+            .unwrap_or_default();
+        let cap = FormatConstraint::for_audio_codec(self.to, &audio_codec);
+        let final_fps = Self::custom_value(&settings.fps)
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(fps);
+        if self.to == ConverterFormat::AMV {
+            if let Some(sample_rate) = Self::custom_value(&settings.sample_rate) {
+                anyhow::ensure!(
+                    sample_rate.parse::<u32>().ok() == Some(22_050),
+                    "AMV requires a sample rate of 22050 Hz"
+                );
+            }
+        }
 
         let auto_video_bitrate = Self::is_auto(&settings.video_bitrate);
         let auto_fps = Self::is_auto(&settings.fps);
         let auto_resolution = Self::is_auto(&settings.resolution);
         let auto_audio_bitrate = Self::is_auto(&settings.audio_bitrate);
         let auto_video_codec = Self::is_auto(&settings.video_codec);
-        let auto_audio_codec = Self::is_auto(&settings.audio_codec);
         let auto_sample_rate = Self::is_auto(&settings.sample_rate);
         let gif_width = Self::custom_value(&settings.resolution)
             .and_then(|custom_resolution| {
@@ -301,7 +302,7 @@ impl Conversion {
         let applied_cap = cap.as_ref().map(|cap| {
             cap.apply(
                 bitrate,
-                fps,
+                final_fps,
                 resolution,
                 auto_video_bitrate,
                 auto_fps,
@@ -337,19 +338,15 @@ impl Conversion {
             &settings.audio_codec,
             &settings.sample_rate,
             &settings.audio_channels,
-        ])
-            || applied_cap
-                .as_ref()
-                .is_some_and(|applied| applied.requires_audio_encoding);
+        ]) || applied_cap
+            .as_ref()
+            .is_some_and(|applied| applied.requires_audio_encoding);
 
-        let input_codecs = job
-            .codecs()
-            .await
-            .unwrap_or_else(|_| ("unknown".to_string(), "unknown".to_string()));
+        let input_codecs = job.codecs().await?;
+        let audio_streams = job.audio_streams().await?;
         let input_pix_fmt = job.pix_fmt().await.unwrap_or_default();
         let input_video_codec = input_codecs.0.to_lowercase();
-        let input_audio_codec = input_codecs.1.to_lowercase();
-        let has_usable_audio = !matches!(input_audio_codec.as_str(), "none" | "unknown");
+        let has_usable_audio = !audio_streams.is_empty();
         let has_alpha = input_pix_fmt.starts_with("yuva")
             || input_pix_fmt.starts_with("gbrap")
             || input_pix_fmt.starts_with("ya")
@@ -371,18 +368,9 @@ impl Conversion {
             && codecs::support_video_codec(self.from, &input_video_codec)
             && codecs::support_video_codec(self.to, &input_video_codec);
 
-        let can_remux_audio = supports_remux
-            && !requires_audio_encoding
-            && has_usable_audio
-            && codecs::support_audio_codec(self.from, &input_audio_codec)
-            && codecs::support_audio_codec(self.to, &input_audio_codec);
-
         let mut remux_streams = Vec::new();
         if can_remux_video {
             remux_streams.push("video".to_string());
-        }
-        if can_remux_audio {
-            remux_streams.push("audio".to_string());
         }
 
         let remux = !remux_streams.is_empty();
@@ -398,14 +386,8 @@ impl Conversion {
                 job.id,
                 remux_streams
             );
-            self.remux_args(
-                gpu,
-                supported_accelerated_codecs,
-                job,
-                &remux_streams,
-                has_usable_audio,
-            )
-            .await
+            self.remux_args(gpu, supported_accelerated_codecs, job, &remux_streams)
+                .await
         } else {
             // extra/override args for specific formats
             match self.to {
@@ -509,20 +491,9 @@ impl Conversion {
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
 
-        let mut result = if can_remux_video {
-            extra_conversion_args
-        } else {
-            [
-                extra_conversion_args,
-                self.to.conversion_into_args(speed, gpu, effective_bitrate),
-            ]
-            .concat()
-        };
+        let mut result = extra_conversion_args;
 
-        if !remux
-            && !has_usable_audio
-            && !matches!(self.to, ConverterFormat::AMV | ConverterFormat::GIF)
-        {
+        if !remux && !matches!(self.to, ConverterFormat::AMV | ConverterFormat::GIF) {
             result.extend(["-map".to_string(), "0:v:0".to_string()]);
         }
 
@@ -533,13 +504,6 @@ impl Conversion {
                 .await
             {
                 Self::insert_codec_arg(&mut result, "-c:v", preferred_video_encoder);
-            }
-        }
-
-        // auto audio codec
-        if auto_audio_codec && !remux && self.to != ConverterFormat::GIF {
-            if let Some(preferred_audio_encoder) = self.preferred_audio_encoder() {
-                Self::insert_codec_arg(&mut result, "-c:a", preferred_audio_encoder);
             }
         }
 
@@ -589,26 +553,60 @@ impl Conversion {
 
         Self::append_constraint_args(&mut result, &cap_args);
 
-        // for some weird case where there wasn't a specified audio codec?
-        // don't actually remember what this was for
-        if !can_remux_audio
-            && has_usable_audio
-            && self.to != ConverterFormat::GIF
-            && !result.contains(&"-c:a".to_string())
-        {
-            result.extend(["-c:a".to_string(), "aac".to_string()]);
-        }
-        // webm + opus needs to be stereo
-        // "Invalid channel layout 4.0 for specified mapping family"
-        let uses_opus = result
+        // grab the final encoder and get the right speed settings
+        let video_encoder = result
             .windows(2)
-            .any(|args| args[0] == "-c:a" && matches!(args[1].as_str(), "opus" | "libopus"));
-        if !can_remux_audio
-            && self.to == ConverterFormat::WebM
-            && uses_opus
-            && Self::is_auto(&settings.audio_channels)
-        {
-            result.extend(["-ac".to_string(), "2".to_string()]);
+            .rev()
+            .find(|args| args[0] == "-c:v")
+            .map(|args| args[1].clone())
+            .unwrap_or_default();
+        let video_bitrate = Self::custom_value(&settings.video_bitrate)
+            .and_then(|value| value.parse::<u64>().ok())
+            .map_or(effective_bitrate, |kbps| kbps * 1_000);
+        result.extend(speed.to_args(&video_encoder, &self.to, video_bitrate));
+
+        let supports_audio =
+            codecs::codec_support_for(self.to).is_some_and(|(_, audio)| !audio.is_empty());
+        if !supports_audio {
+            result.push("-an".to_string());
+        } else {
+            for (output_index, stream) in audio_streams.iter().enumerate() {
+                // only allows one audio stream
+                if matches!(self.to, ConverterFormat::AMV | ConverterFormat::SWF)
+                    && output_index > 0
+                {
+                    break;
+                }
+                if self.to != ConverterFormat::AMV {
+                    result.extend(["-map".to_string(), format!("0:{}", stream.index)]);
+                }
+
+                // copy if possible, else encode
+                let copy = !requires_audio_encoding
+                    && codecs::support_audio_codec(self.to, &stream.codec_name.to_lowercase());
+                let encoder = if copy { "copy" } else { &audio_codec };
+                anyhow::ensure!(!encoder.is_empty(), "no audio encoder for {}", self.to);
+                info!(
+                    "job {} audio input stream {} ({}) -> output a:{} using {}",
+                    job.id, stream.index, stream.codec_name, output_index, encoder
+                );
+                result.extend([format!("-c:a:{}", output_index), encoder.to_string()]);
+
+                // webm + opus needs to be stereo
+                // "Invalid channel layout 4.0 for specified mapping family"
+                if !copy
+                    && self.to == ConverterFormat::WebM
+                    && matches!(encoder, "opus" | "libopus")
+                    && Self::is_auto(&settings.audio_channels)
+                {
+                    result.extend([format!("-ac:a:{}", output_index), "2".to_string()]);
+                }
+            }
+
+            // add empty audio track since amv requires an audio track 
+            if self.to == ConverterFormat::AMV && !has_usable_audio {
+                result.extend(["-c:a:0".to_string(), audio_codec.clone()]);
+            }
         }
 
         if flatten_alpha {
@@ -634,24 +632,16 @@ impl Conversion {
         supported_accelerated_codecs: &[String],
         job: &Job,
         remux: &[String],
-        has_usable_audio: bool,
     ) -> Vec<String> {
         let mut args = vec!["-map".to_string(), "0:v:0".to_string()];
         if matches!(self.to, ConverterFormat::MTS | ConverterFormat::TS) {
             args.extend(["-avoid_negative_ts".to_string(), "make_zero".to_string()]);
         }
-        let Some((supported_video_codecs, supported_audio_codecs)) =
-            codecs::codec_support_for(self.to)
-        else {
+        let Some((supported_video_codecs, _)) = codecs::codec_support_for(self.to) else {
             return args;
         };
 
         let remux_video = remux.contains(&"video".to_string());
-        let remux_audio = remux.contains(&"audio".to_string());
-        if has_usable_audio && !supported_audio_codecs.is_empty() {
-            let audio_map = if remux_audio { "0:a?" } else { "0:a:0" };
-            args.extend(["-map".to_string(), audio_map.to_string()]);
-        }
 
         if remux_video {
             args.extend(["-c:v".to_string(), "copy".to_string()]);
@@ -666,17 +656,6 @@ impl Conversion {
                 )
                 .await;
             args.extend(["-c:v".to_string(), encoder]);
-        }
-
-        if remux_audio {
-            args.extend(["-c:a".to_string(), "copy".to_string()]);
-        } else if has_usable_audio {
-            if let Some(preferred_audio_codec) = supported_audio_codecs.first() {
-                args.extend([
-                    "-c:a".to_string(),
-                    Self::default_encoder_for_codec(preferred_audio_codec),
-                ]);
-            }
         }
 
         args.extend(["-strict".to_string(), "experimental".to_string()]);

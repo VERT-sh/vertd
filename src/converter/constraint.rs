@@ -104,6 +104,26 @@ impl FormatConstraint {
         }
     }
 
+    pub fn for_audio_codec(format: ConverterFormat, codec: &str) -> Option<Self> {
+        let mut constraint = Self::for_format(format)?;
+        if matches!(format, ConverterFormat::ThreeGP | ConverterFormat::ThreeG2) {
+            match codec {
+                "amr_nb" | "libopencore_amrnb" => {
+                    constraint.audio_sample_rate = Some(Constraint::Exact(8_000));
+                    constraint.audio_channels = Some(Constraint::Exact(1));
+                    constraint.audio_bitrate = Some(Constraint::Exact(12_200));
+                }
+                "amr_wb" | "libvo_amrwbenc" => {
+                    constraint.audio_sample_rate = Some(Constraint::Exact(16_000));
+                    constraint.audio_channels = Some(Constraint::Exact(1));
+                    constraint.audio_bitrate = Some(Constraint::Exact(12_650));
+                }
+                _ => {}
+            }
+        }
+        Some(constraint)
+    }
+
     pub fn apply(
         &self,
         bitrate: u64,
@@ -194,7 +214,9 @@ impl FormatConstraint {
                     Constraint::Cap(sample_rate) | Constraint::Exact(sample_rate) => sample_rate,
                 })
                 .unwrap_or(22_050);
-            let block_size = (effective_sample_rate / effective_fps).max(1);
+            let block_size = ((u64::from(effective_sample_rate) + u64::from(effective_fps) / 2)
+                / u64::from(effective_fps))
+            .max(1);
 
             args.extend(["-block_size".to_string(), block_size.to_string()]);
             requires_audio_encoding = true;
@@ -223,7 +245,7 @@ impl FormatConstraint {
                 }
 
                 Some(format!(
-                    "scale='min({},iw)':'min({},ih)':force_original_aspect_ratio=decrease",
+                    "scale='min({},iw)':'min({},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
                     max_width, max_height
                 ))
             }

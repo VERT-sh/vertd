@@ -33,7 +33,7 @@ pub fn codec_support_for(
 ) -> Option<(&'static [&'static str], &'static [&'static str])> {
     match format {
         ConverterFormat::MP4 => Some((
-            &["h264", "hevc", "av1", "mpeg4", "vp9", "mpeg2video", "mpeg1video", "prores"],
+            &["h264", "hevc", "av1", "mpeg4", "vp9", "mpeg2video", "mpeg1video"],
             &["aac", "mp3", "ac3", "eac3", "libopus", "alac", "flac"],
         )),
         ConverterFormat::WebM => Some((
@@ -46,7 +46,7 @@ pub fn codec_support_for(
         )),
         ConverterFormat::MKV => Some((
             &["h264", "hevc", "av1", "vp9", "vp8", "mpeg2video", "mpeg4", "prores", "dnxhd", "ffv1", "huffyuv", "mjpeg", "mpeg1video"],
-            &["aac", "mp3", "ac3", "eac3", "dts", "libopus", "libvorbis", "flac", "alac", "wavpack", "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le", "pcm_f64le", "pcm_mulaw", "pcm_alaw", "pcm_u8", "pcm_f16le", "pcm_f24le", "pcm_f32be", "pcm_f64be", "pcm_s16be", "pcm_s24be", "pcm_s32be", "pcm_s64be", "pcm_s64le", "pcm_u16be", "pcm_u16le", "pcm_u24be", "pcm_u24le", "pcm_u32be", "pcm_u32le"],
+            &["aac", "mp3", "ac3", "eac3", "dts", "libopus", "libvorbis", "flac", "alac", "wavpack", "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le", "pcm_f64le", "pcm_mulaw", "pcm_alaw", "pcm_u8", "pcm_f16le", "pcm_f24le", "pcm_f32be", "pcm_f64be", "pcm_s16be", "pcm_s24be", "pcm_s32be", "pcm_s64be", "pcm_s64le", "pcm_u16be", "pcm_u24be", "pcm_u24le", "pcm_u32be", "pcm_u32le"],
         )),
         ConverterFormat::MOV => Some((
             &["h264", "hevc", "prores", "dnxhd", "mpeg4", "mjpeg", "ffv1"],
@@ -98,7 +98,7 @@ pub fn codec_support_for(
         )),
         ConverterFormat::MXF => Some((
             &["prores", "dnxhd", "h264", "mpeg2video", "avc_intra", "jpeg2000"],
-            &["pcm_s24le", "pcm_s16le", "pcm_s32le", "pcm_f32le", "pcm_f64le", "aac", "ac3"],
+            &["pcm_s24le", "pcm_s16le", "pcm_s32le", "pcm_f32le", "pcm_f64le"],
         )),
         ConverterFormat::GXF => Some((
             &["mpeg2video", "dvvideo", "mjpeg", "mpeg1video"],
