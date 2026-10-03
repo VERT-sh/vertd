@@ -95,7 +95,7 @@ impl Conversion {
             // try all codecs in order and use first supported, else fallback to default
             if supported_accelerated_codecs
                 .iter()
-                .any(|c| c.contains(codec))
+                .any(|c| c == *codec)
             {
                 return gpu
                     .get_accelerated_codec(codec)

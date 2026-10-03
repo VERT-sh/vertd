@@ -221,7 +221,7 @@ async fn main() -> anyhow::Result<()> {
     let gpu = gpu.unwrap_or(ConverterGPU::CPU);
 
     // check which accelerated codecs are actually supported by this GPU
-    let accelerated_codecs = check_accelerated_codecs(gpu).await;
+    let accelerated_codecs = check_accelerated_codecs(gpu, vaapi_device_path.as_deref()).await;
 
     {
         let mut app_state = state::APP_STATE.lock().await;
@@ -261,8 +261,8 @@ async fn main() -> anyhow::Result<()> {
 
 // checks if the gpu supports accelerated encoding
 // builds supported_accelerated_codecs in AppState to avoid unnecessary errors/conversions (see format.rs#accelerated_or_default_codec)
-async fn check_accelerated_codecs(gpu: ConverterGPU) -> Vec<String> {
-    let test_codecs = vec!["h264", "av1", "vp9", "vp8", "mpeg2"];
+async fn check_accelerated_codecs(gpu: ConverterGPU, vaapi_device_path: Option<&str>) -> Vec<String> {
+    let test_codecs = ConverterGPU::PROBE_CODECS;
     let mut supported = Vec::new();
     let mut unsupported = Vec::new();
 
@@ -275,24 +275,17 @@ async fn check_accelerated_codecs(gpu: ConverterGPU) -> Vec<String> {
     for codec in test_codecs {
         let encoder = match gpu.get_accelerated_codec(codec).await {
             Ok(enc) => enc,
-            Err(_) => {
+            Err(e) => {
+                warn!("no accelerated encoder for codec {}: {}", codec, e);
                 unsupported.push(codec.to_string());
                 continue;
             }
         };
 
         let process = Command::new("ffmpeg")
-            .args([
-                "-f",
-                "lavfi",
-                "-i",
-                "testsrc=duration=1:size=1280x720:rate=30",
-                "-c:v",
-                &encoder,
-                "-f",
-                "null",
-                "-",
-            ])
+            .args(gpu.probe_args(&encoder, vaapi_device_path))
+            .kill_on_drop(true)
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
             .spawn();
@@ -304,6 +297,12 @@ async fn check_accelerated_codecs(gpu: ConverterGPU) -> Vec<String> {
                     if !stderr.contains("Error while opening encoder") && output.status.success() {
                         supported.push(codec.to_string());
                     } else {
+                        warn!(
+                            "accelerated probe failed for {} ({}): {}",
+                            codec,
+                            encoder,
+                            stderr.trim()
+                        );
                         unsupported.push(codec.to_string());
                     }
                 }
@@ -312,10 +311,12 @@ async fn check_accelerated_codecs(gpu: ConverterGPU) -> Vec<String> {
                         "failed to wait on ffmpeg process for codec {}: {}",
                         codec, e
                     );
+                    unsupported.push(codec.to_string());
                 }
             },
             Err(e) => {
                 warn!("failed to execute ffmpeg for codec {}: {}", codec, e);
+                unsupported.push(codec.to_string());
             }
         }
     }

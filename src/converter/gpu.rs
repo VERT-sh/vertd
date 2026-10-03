@@ -14,6 +14,55 @@ pub enum ConverterGPU {
 }
 
 impl ConverterGPU {
+    pub const PROBE_CODECS: &[&str] = &[
+        "h264",
+        "hevc",
+        "av1",
+        "vp9",
+        "vp8",
+        "mpeg2video",
+        "mpeg4",
+        "mjpeg",
+        "prores",
+    ];
+
+    pub fn probe_args(&self, encoder: &str, vaapi_device_path: Option<&str>) -> Vec<String> {
+        let mut args = vec![
+            "-hide_banner".to_string(),
+            "-loglevel".to_string(),
+            "error".to_string(),
+        ];
+        #[cfg(target_os = "linux")]
+        if matches!(self, Self::AMD | Self::Intel) {
+            args.extend([
+                "-vaapi_device".to_string(),
+                vaapi_device_path
+                    .unwrap_or("/dev/dri/renderD128")
+                    .to_string(),
+            ]);
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = vaapi_device_path;
+        args.extend([
+            "-f".to_string(),
+            "lavfi".to_string(),
+            "-i".to_string(),
+            "testsrc2=duration=1:size=1280x720:rate=30".to_string(),
+        ]);
+        #[cfg(target_os = "linux")]
+        if matches!(self, Self::AMD | Self::Intel) {
+            args.extend(["-vf".to_string(), "format=nv12,hwupload".to_string()]);
+        }
+        args.extend([
+            "-c:v".to_string(),
+            encoder.to_string(),
+            "-f".to_string(),
+            "null".to_string(),
+            "-".to_string(),
+        ]);
+        args
+    }
+
     pub async fn get_accelerated_codec(&self, codec: &str) -> anyhow::Result<String> {
         if matches!(self, ConverterGPU::CPU) {
             return Err(anyhow!(
@@ -21,16 +70,31 @@ impl ConverterGPU {
             ));
         }
 
+        // ffmpeg names the codec mpeg2video, but hardware encoders use mpeg2_*
+        let encoder_codec = if codec == "mpeg2video" {
+            "mpeg2"
+        } else {
+            codec
+        };
         let priority = self.encoder_priority();
         let encoders = Command::new("ffmpeg")
             .args(["-hide_banner", "-encoders"])
             .output()
             .await
             .map_err(|e| anyhow!("failed to get encoder support: {}", e))?;
+        if !encoders.status.success() {
+            return Err(anyhow!(
+                "ffmpeg encoder listing failed: {}",
+                encoders.status
+            ));
+        }
         let encoders = String::from_utf8(encoders.stdout)?;
         for encoder in priority {
-            let encoder = format!("{}_{}", codec, encoder);
-            if encoders.contains(&encoder) {
+            let encoder = format!("{}_{}", encoder_codec, encoder);
+            if encoders
+                .lines()
+                .any(|line| line.split_whitespace().nth(1) == Some(encoder.as_str()))
+            {
                 return Ok(encoder);
             }
         }
