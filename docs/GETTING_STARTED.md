@@ -25,13 +25,13 @@ This file covers how to get started with `vertd`.
 
 ## Installing dependencies
 
-For `vertd` to work, you'll need to have [FFmpeg](https://ffmpeg.org/) in the directory it is in or in your system PATH.
+For `vertd` to work, you'll need to have [FFmpeg](https://ffmpeg.org/) in your system PATH or the directory it is in*.
 
 The instructions below will use a package manager to install it, but you can also download FFmpeg binaries from [their website](https://ffmpeg.org/download.html#build-windows)
-instead. You can either put them in your system PATH or in the directory `vertd` is in.
+instead. Make sure the FFmpeg binaries are on your system PATH or in the directory `vertd` is in*.
 
-> [!NOTE]  
-> Other utilities in the FFmpeg suite like `ffprobe` should also be installed for `vertd` to work properly.
+> [!NOTE]
+> On Windows, placing the binaries in the directory `vertd.exe` is in works, NOT on macOS or Linux (including WSL).
 
 ### Windows
 
@@ -51,7 +51,7 @@ $ brew install ffmpeg
 
 ### Linux
 
-The installation steps depend on your distribution - this will cover the most commonly used ones:a
+The installation steps depend on your distribution - this will cover the most commonly used ones:
 
 #### Debian
 
@@ -66,7 +66,7 @@ $ sudo apt update && sudo apt install -y ffmpeg
 This should also work for other Arch-based distributions such as Manjaro and EndeavourOS.
 
 ```shell
-$ sudo pacman -Sy ffmpeg
+$ sudo pacman -Syu ffmpeg
 ```
 
 #### Fedora
