@@ -207,7 +207,11 @@ pub fn formats_for_codec(codec: &str) -> CodecFormatsSupport {
             continue;
         };
 
-        if video.iter().any(|c| *c == codec) || audio.iter().any(|c| *c == codec) {
+        if video
+            .iter()
+            .chain(audio.iter())
+            .any(|c| canonical_codec(c) == canonical_codec(&codec))
+        {
             formats.push(format.to_string());
         }
     }
@@ -223,7 +227,9 @@ pub fn support_video_codec(format: ConverterFormat, codec: &str) -> bool {
     };
 
     let codec = codec.to_lowercase();
-    video.iter().any(|supported| codec.contains(supported))
+    video
+        .iter()
+        .any(|supported| canonical_codec(&codec) == canonical_codec(supported))
 }
 
 pub fn support_audio_codec(format: ConverterFormat, codec: &str) -> bool {
@@ -232,5 +238,33 @@ pub fn support_audio_codec(format: ConverterFormat, codec: &str) -> bool {
     };
 
     let codec = codec.to_lowercase();
-    audio.iter().any(|supported| codec.contains(supported))
+    audio
+        .iter()
+        .any(|supported| canonical_codec(&codec) == canonical_codec(supported))
+}
+
+fn canonical_codec(codec: &str) -> &str {
+    match codec {
+        "liboapv" => "apv",
+        "libaom-av1" | "librav1e" | "libsvtav1" => "av1",
+        "libxavs2" => "avs2",
+        "libxavs" => "cavs",
+        "libxeve" => "evc",
+        "libx264" | "libx264rgb" | "libopenh264" => "h264",
+        "libx265" | "libkvazaar" => "hevc",
+        "libopenjpeg" => "jpeg2000",
+        "libjxl" => "jpegxl",
+        "libjxl_anim" => "jpegxl_anim",
+        "libxvid" => "mpeg4",
+        "libvpx" => "vp8",
+        "libvpx-vp9" => "vp9",
+        "libvvenc" => "vvc",
+        "libwebp_anim" => "webp",
+        "libopencore_amrnb" => "amr_nb",
+        "libvo_amrwbenc" => "amr_wb",
+        "libtwolame" => "mp2",
+        "libmp3lame" | "libshine" => "mp3",
+        // try lib(x) then name itself
+        other => other.strip_prefix("lib").unwrap_or(other),
+    }
 }

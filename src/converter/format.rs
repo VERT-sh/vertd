@@ -169,6 +169,19 @@ impl Conversion {
         args.extend(["-vf".to_string(), filter.to_string()]);
     }
 
+    fn append_constraint_args(args: &mut Vec<String>, constraints: &[String]) {
+        let mut constraints = constraints.iter();
+        while let Some(arg) = constraints.next() {
+            if arg == "-vf" {
+                if let Some(filter) = constraints.next() {
+                    Self::append_video_filter(args, filter);
+                }
+            } else {
+                args.push(arg.clone());
+            }
+        }
+    }
+
     async fn preferred_video_encoder(
         &self,
         gpu: &ConverterGPU,
@@ -322,9 +335,11 @@ impl Conversion {
             &settings.audio_bitrate,
             &settings.audio_codec,
             &settings.sample_rate,
-        ]) || applied_cap
-            .as_ref()
-            .is_some_and(|applied| applied.requires_audio_encoding);
+            &settings.audio_channels,
+        ])
+            || applied_cap
+                .as_ref()
+                .is_some_and(|applied| applied.requires_audio_encoding);
 
         let input_codecs = job
             .codecs()
@@ -334,12 +349,24 @@ impl Conversion {
         let input_video_codec = input_codecs.0.to_lowercase();
         let input_audio_codec = input_codecs.1.to_lowercase();
         let has_usable_audio = !matches!(input_audio_codec.as_str(), "none" | "unknown");
+        let has_alpha = input_pix_fmt.starts_with("yuva")
+            || input_pix_fmt.starts_with("gbrap")
+            || input_pix_fmt.starts_with("ya")
+            || input_pix_fmt.starts_with("rgba")
+            || input_pix_fmt.starts_with("bgra")
+            || matches!(input_pix_fmt.as_str(), "argb" | "abgr" | "ayuv" | "vuya");
+        let flatten_alpha = has_alpha
+            && !matches!(
+                self.to,
+                ConverterFormat::GIF | ConverterFormat::WEBP | ConverterFormat::APNG
+            );
 
         let supports_remux = codecs::codec_support_for(self.from).is_some()
             && codecs::codec_support_for(self.to).is_some();
 
         let can_remux_video = supports_remux
             && !requires_video_encoding
+            && !flatten_alpha
             && codecs::support_video_codec(self.from, &input_video_codec)
             && codecs::support_video_codec(self.to, &input_video_codec);
 
@@ -370,8 +397,14 @@ impl Conversion {
                 job.id,
                 remux_streams
             );
-            self.remux_args(gpu, supported_accelerated_codecs, job, &remux_streams)
-                .await
+            self.remux_args(
+                gpu,
+                supported_accelerated_codecs,
+                job,
+                &remux_streams,
+                has_usable_audio,
+            )
+            .await
         } else {
             // extra/override args for specific formats
             match self.to {
@@ -475,7 +508,7 @@ impl Conversion {
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
 
-        let mut result = if remux {
+        let mut result = if can_remux_video {
             extra_conversion_args
         } else {
             [
@@ -522,7 +555,7 @@ impl Conversion {
             if let Some(custom_res) = Self::custom_value(&settings.resolution) {
                 if let Some((w, h)) = custom_res.split_once('x') {
                     if w.parse::<u32>().is_ok() && h.parse::<u32>().is_ok() {
-                        result.extend(["-vf".to_string(), format!("scale={}:{}", w, h)]);
+                        Self::append_video_filter(&mut result, &format!("scale={}:{}", w, h));
                     }
                 }
             }
@@ -553,13 +586,15 @@ impl Conversion {
             result.extend(["-ar".to_string(), sample_r.to_string()]);
         }
 
-        if !remux {
-            result.extend(cap_args);
-        }
+        Self::append_constraint_args(&mut result, &cap_args);
 
         // for some weird case where there wasn't a specified audio codec?
         // don't actually remember what this was for
-        if self.to != ConverterFormat::GIF && !result.contains(&"-c:a".to_string()) {
+        if !can_remux_audio
+            && has_usable_audio
+            && self.to != ConverterFormat::GIF
+            && !result.contains(&"-c:a".to_string())
+        {
             result.extend(["-c:a".to_string(), "aac".to_string()]);
         }
         // webm + opus needs to be stereo
@@ -567,20 +602,15 @@ impl Conversion {
         let uses_opus = result
             .windows(2)
             .any(|args| args[0] == "-c:a" && matches!(args[1].as_str(), "opus" | "libopus"));
-        if !remux
+        if !can_remux_audio
             && self.to == ConverterFormat::WebM
             && uses_opus
-            && settings.audio_channels.is_none()
+            && Self::is_auto(&settings.audio_channels)
         {
             result.extend(["-ac".to_string(), "2".to_string()]);
         }
 
-        if input_pix_fmt.contains('a')
-            && !matches!(
-                self.to,
-                ConverterFormat::GIF | ConverterFormat::WEBP | ConverterFormat::APNG
-            )
-        {
+        if flatten_alpha {
             Self::append_video_filter(
                 &mut result,
                 "format=rgba,geq=r='r(X,Y)*alpha(X,Y)/255':g='g(X,Y)*alpha(X,Y)/255':b='b(X,Y)*alpha(X,Y)/255':a=255,format=yuv420p",
@@ -603,22 +633,12 @@ impl Conversion {
         supported_accelerated_codecs: &[String],
         job: &Job,
         remux: &[String],
+        has_usable_audio: bool,
     ) -> Vec<String> {
-        let mut args = vec!["-c".to_string(), "copy".to_string()];
+        let mut args = vec!["-map".to_string(), "0:v:0".to_string()];
         if matches!(self.to, ConverterFormat::MTS | ConverterFormat::TS) {
             args.extend(["-avoid_negative_ts".to_string(), "make_zero".to_string()]);
         }
-        if remux.contains(&"video".to_string()) {
-            args.extend(["-map".to_string(), "0:v:0".to_string()]);
-        }
-        if remux.contains(&"audio".to_string()) {
-            args.extend(["-map".to_string(), "0:a?".to_string()]);
-        }
-        let codecs = job
-            .codecs()
-            .await
-            .unwrap_or_else(|_| ("unknown".to_string(), "unknown".to_string()));
-        let audio_codec = codecs.1.to_lowercase();
         let Some((supported_video_codecs, supported_audio_codecs)) =
             codecs::codec_support_for(self.to)
         else {
@@ -627,6 +647,10 @@ impl Conversion {
 
         let remux_video = remux.contains(&"video".to_string());
         let remux_audio = remux.contains(&"audio".to_string());
+        if has_usable_audio && !supported_audio_codecs.is_empty() {
+            let audio_map = if remux_audio { "0:a?" } else { "0:a:0" };
+            args.extend(["-map".to_string(), audio_map.to_string()]);
+        }
 
         if remux_video {
             args.extend(["-c:v".to_string(), "copy".to_string()]);
@@ -645,7 +669,7 @@ impl Conversion {
 
         if remux_audio {
             args.extend(["-c:a".to_string(), "copy".to_string()]);
-        } else if audio_codec != "none" || audio_codec != "unknown" {
+        } else if has_usable_audio {
             if let Some(preferred_audio_codec) = supported_audio_codecs.first() {
                 args.extend([
                     "-c:a".to_string(),

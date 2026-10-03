@@ -31,7 +31,7 @@ pub struct ConversionSettings {
     pub video_bitrate: Option<String>,
     pub audio_codec: Option<String>,
     pub audio_bitrate: Option<String>,
-    pub audio_channels: Option<u8>, // in ui, it is an integer rather than string
+    pub audio_channels: Option<String>,
     pub sample_rate: Option<String>,
 }
 
