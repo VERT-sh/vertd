@@ -603,7 +603,7 @@ impl Conversion {
                 }
             }
 
-            // add empty audio track since amv requires an audio track 
+            // add empty audio track since amv requires an audio track
             if self.to == ConverterFormat::AMV && !has_usable_audio {
                 result.extend(["-c:a:0".to_string(), audio_codec.clone()]);
             }

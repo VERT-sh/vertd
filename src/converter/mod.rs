@@ -13,8 +13,8 @@ use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
-pub mod constraint;
 pub mod codecs;
+pub mod constraint;
 pub mod format;
 pub mod gpu;
 pub mod job;

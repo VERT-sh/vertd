@@ -65,7 +65,10 @@ impl Drop for PendingUpload {
             tokio::spawn(async move {
                 if let Some(file) = file {
                     drop(file.into_std().await);
-                    log::warn!("file upload interrupted, deleting incomplete upload: {}", path);
+                    log::warn!(
+                        "file upload interrupted, deleting incomplete upload: {}",
+                        path
+                    );
                 }
                 if let Err(e) = fs::remove_file(&path).await {
                     if e.kind() != std::io::ErrorKind::NotFound {

@@ -51,7 +51,10 @@ impl Drop for AdminDownloadGuard {
     fn drop(&mut self) {
         if self.should_delete() {
             let path = self.path.clone();
-            log::info!("permanent file {} scheduled for deletion in 10 seconds", path);
+            log::info!(
+                "permanent file {} scheduled for deletion in 10 seconds",
+                path
+            );
             tokio::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                 if let Err(e) = fs::remove_file(&path).await {

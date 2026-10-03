@@ -261,7 +261,10 @@ async fn main() -> anyhow::Result<()> {
 
 // checks if the gpu supports accelerated encoding
 // builds supported_accelerated_codecs in AppState to avoid unnecessary errors/conversions (see format.rs#accelerated_or_default_codec)
-async fn check_accelerated_codecs(gpu: ConverterGPU, vaapi_device_path: Option<&str>) -> Vec<String> {
+async fn check_accelerated_codecs(
+    gpu: ConverterGPU,
+    vaapi_device_path: Option<&str>,
+) -> Vec<String> {
     let test_codecs = ConverterGPU::PROBE_CODECS;
     let mut supported = Vec::new();
     let mut unsupported = Vec::new();
