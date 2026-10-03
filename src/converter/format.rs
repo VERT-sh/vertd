@@ -49,7 +49,7 @@ pub enum ConverterFormat {
 impl ConverterFormat {
     pub fn input_format_args(&self) -> &'static [&'static str] {
         match self {
-            Self::MTS | Self::TS => &["-fflags", "+genpts"],
+            Self::MTS | Self::TS | Self::FLV | Self::NUT => &["-fflags", "+genpts"],
             _ => &[],
         }
     }
@@ -59,7 +59,7 @@ impl ConverterFormat {
             // need to tell ffmpeg .ogx is a ogg format or it'll fail
             Self::OGX => &["-f", "ogg"],
             Self::DIVX => &["-f", "avi"],
-            Self::MXF => &["-timecode", "00:00:00:00"],
+            Self::MXF => &["-timecode", "00:00:00:00", "-g", "128"],
             _ => &[],
         }
     }
