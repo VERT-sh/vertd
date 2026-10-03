@@ -184,14 +184,6 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     continue;
                 };
 
-                {
-                    let mut app_state = APP_STATE.lock().await;
-                    if let Some(state_job) = app_state.jobs.get_mut(&job_id) {
-                        state_job.to = Some(to.to_string());
-                    }
-                }
-                job.to = Some(to.to_string());
-
                 if let Err(e) = settings.validate() {
                     log::warn!("invalid settings for job {}: {}", job_id, e);
                     if !send_ws_message(
@@ -254,12 +246,54 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     }
                 };
 
+                // reserve job to prevent multiple ws clients from starting the same job simultaneously
+                let reserved = {
+                    let mut app_state = APP_STATE.lock().await;
+                    if let Some(state_job) = app_state.jobs.get_mut(&job_id) {
+                        state_job.try_start(to.to_string())
+                    } else {
+                        false
+                    }
+                };
+                if !reserved {
+                    if !send_ws_message(
+                        &mut session,
+                        Message::Error {
+                            message: "job already started or no longer available".to_string(),
+                        },
+                    )
+                    .await
+                    {
+                        break;
+                    }
+                    continue;
+                }
+                job.to = Some(to.to_string());
+
                 let (mut rx, process) = match converter
                     .convert(&mut job, &gpu, vaapi_device_path.as_deref())
                     .await
                 {
                     Ok((rx, process)) => (rx, process),
                     Err(e) => {
+                        // remove job if somehow job never was able to start
+                        if let Some(job) = APP_STATE.lock().await.jobs.get_mut(&job_id) {
+                            job.state = JobState::Failed;
+                        }
+                        let output_path = format!("output/{}.{}", job_id, to);
+                        tokio::spawn(async move {
+                            tokio::time::sleep(OUTPUT_LIFETIME).await;
+                            APP_STATE.lock().await.jobs.remove(&job_id);
+                            if let Err(e) = fs::remove_file(&output_path).await {
+                                if e.kind() != ErrorKind::NotFound {
+                                    log::error!(
+                                        "failed to remove setup-failure output {}: {}",
+                                        output_path,
+                                        e
+                                    );
+                                }
+                            }
+                        });
                         if !send_ws_message(
                             &mut session,
                             Message::Error {
@@ -279,6 +313,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                 let mut fallback_logs = Vec::new();
                 let mut is_fallback = false;
                 let mut job_cancelled = false;
+                let mut disconnected_while_waiting = false;
                 let mut current_gpu = gpu;
                 let mut process_opt = Some(process);
                 'conversion: loop {
@@ -322,9 +357,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                             log::info!("cancelling job {}", job_id);
                                             job_cancelled = true;
 
-                                            if !send_ws_message(&mut session, Message::JobCancelled { job_id }).await {
-                                                break 'conversion;
-                                            }
+                                            let _ = send_ws_message(&mut session, Message::JobCancelled { job_id }).await;
 
                                             break;
                                         } else if !send_ws_message(
@@ -335,11 +368,11 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                         )
                                         .await
                                         {
-                                            break 'conversion;
+                                            break;
                                         }
                                     }
-                                } else if new_message.is_none() {
-                                    // ws closed
+                                } else if !matches!(new_message, Some(Ok(_))) {
+                                    // ws closed or errored
                                     break;
                                 }
                             }
@@ -384,16 +417,76 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         break 'conversion;
                     }
 
-                    // clean up
-                    {
+                    // check process exit status to update job state
+                    let process = {
                         let mut app_state = APP_STATE.lock().await;
-                        if let Some(job) = app_state.jobs.get_mut(&job_id) {
-                            job.state = JobState::Completed;
+                        app_state.active_processes.remove(&job_id)
+                    };
+                    let process_succeeded = if let Some(mut process) = process {
+                        let exit = loop {
+                            tokio::select! {
+                                exit = process.wait() => break exit,
+                                message = stream.next() => {
+                                    let cancel = match &message {
+                                        Some(Ok(AggregatedMessage::Text(text))) => {
+                                            matches!(serde_json::from_str::<Message>(text),
+                                                Ok(Message::CancelJob { token: cancel_token, job_id: cancel_id })
+                                                if cancel_token == token && cancel_id == job_id)
+                                        }
+                                        _ => false,
+                                    };
+                                    if cancel || !matches!(message, Some(Ok(_))) {
+                                        job_cancelled = cancel;
+                                        disconnected_while_waiting = !cancel;
+                                        if let Err(e) = process.kill().await {
+                                            log::error!("failed to kill waiting process for job {}: {}", job_id, e);
+                                        }
+                                        if cancel {
+                                            let _ = send_ws_message(&mut session, Message::JobCancelled { job_id }).await;
+                                        }
+                                        break process.wait().await;
+                                    }
+                                }
+                            }
+                        };
+                        match exit {
+                            Ok(status) => {
+                                if !status.success() {
+                                    let error = format!("FFmpeg exited with {}", status);
+                                    if is_fallback {
+                                        fallback_logs.push(error);
+                                    } else {
+                                        logs.push(error);
+                                    }
+                                }
+                                status.success()
+                            }
+                            Err(e) => {
+                                log::error!("failed to wait for job {}: {}", job_id, e);
+                                false
+                            }
                         }
+                    } else {
+                        false
+                    };
 
-                        app_state.active_processes.remove(&job_id);
-
-                        drop(app_state);
+                    if job_cancelled {
+                        APP_STATE.lock().await.jobs.remove(&job_id);
+                        if let Err(e) =
+                            fs::remove_file(format!("input/{}.{}", job.id, job.from)).await
+                        {
+                            if e.kind() != ErrorKind::NotFound {
+                                log::error!(
+                                    "failed to remove cancelled input for job {}: {}",
+                                    job_id,
+                                    e
+                                );
+                            }
+                        }
+                        break 'conversion;
+                    }
+                    if disconnected_while_waiting {
+                        break 'conversion;
                     }
 
                     // check if output/{}.{} exists and isn't empty
@@ -402,11 +495,12 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         .map(|m| m.len() == 0)
                         .unwrap_or(true);
 
-                    if is_empty {
+                    if is_empty || !process_succeeded {
                         // if GPU-related failure, try falling back to CPU/software conversion if allowed
                         let cpu_fallback =
                             env::var("ALLOW_CPU_FALLBACK").unwrap_or("true".to_string()) == "true";
                         if current_gpu != ConverterGPU::CPU && cpu_fallback {
+                            current_gpu = ConverterGPU::CPU;
                             log::info!("attempting CPU fallback for job {}", job_id);
                             let converter =
                                 Converter::new(from, to, speed.clone(), settings.clone());
@@ -414,6 +508,11 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                 match converter.convert(&mut job, &ConverterGPU::CPU, None).await {
                                     Ok((rx, process)) => (rx, process),
                                     Err(e) => {
+                                        if let Some(job) =
+                                            APP_STATE.lock().await.jobs.get_mut(&job_id)
+                                        {
+                                            job.state = JobState::Failed;
+                                        }
                                         if !send_ws_message(
                                             &mut session,
                                             Message::Error {
@@ -428,12 +527,11 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                             break 'conversion;
                                         }
 
-                                        continue;
+                                        break 'conversion;
                                     }
                                 };
                             rx = new_rx;
                             process_opt = Some(new_process);
-                            current_gpu = ConverterGPU::CPU;
                             is_fallback = true;
                             if !send_ws_message(&mut session, Message::JobRetried { job_id }).await
                             {
@@ -492,12 +590,32 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                 }
                             });
                         }
-                    } else if !send_ws_message(&mut session, Message::JobFinished { job_id }).await
-                    {
-                        break 'conversion;
+                    } else {
+                        if let Some(job) = APP_STATE.lock().await.jobs.get_mut(&job_id) {
+                            job.state = JobState::Completed;
+                        }
+                        if !send_ws_message(&mut session, Message::JobFinished { job_id }).await {
+                            break 'conversion;
+                        }
                     }
 
                     break 'conversion;
+                }
+
+                // kill running process if it is still somehow running
+                let active_process = APP_STATE.lock().await.active_processes.remove(&job_id);
+                if let Some(mut process) = process_opt.take().or(active_process) {
+                    if let Err(e) = process.kill().await {
+                        log::error!("failed to kill process for job {}: {}", job_id, e);
+                    }
+                }
+                {
+                    let mut app_state = APP_STATE.lock().await;
+                    if let Some(job) = app_state.jobs.get_mut(&job_id) {
+                        if job.processing() {
+                            job.state = JobState::Failed;
+                        }
+                    }
                 }
 
                 tokio::spawn(async move {

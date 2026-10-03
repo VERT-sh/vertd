@@ -196,6 +196,7 @@ impl Converter {
         info!("running 'ffmpeg {}'", command.join(" "));
 
         let mut process = Command::new("ffmpeg")
+            .kill_on_drop(true)
             .args(command)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())

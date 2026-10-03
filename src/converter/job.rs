@@ -67,6 +67,19 @@ impl Job {
         self.state == JobState::Processing
     }
 
+    pub fn reserved(&self) -> bool {
+        self.to.is_some() && !self.completed() && !self.errored()
+    }
+
+    pub fn try_start(&mut self, target: String) -> bool {
+        if self.to.is_some() || self.completed() {
+            return false;
+        }
+        self.to = Some(target);
+        self.state = JobState::Processing;
+        true
+    }
+
     pub async fn bitrate(&mut self) -> anyhow::Result<u64> {
         if let Some(bitrate) = self.bitrate {
             return Ok(bitrate);
