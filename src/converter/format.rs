@@ -277,6 +277,7 @@ impl Conversion {
         settings: &ConversionSettings,
     ) -> anyhow::Result<Vec<String>> {
         let cap = FormatConstraint::for_format(self.to);
+        settings.validate()?;
 
         let auto_video_bitrate = Self::is_auto(&settings.video_bitrate);
         let auto_fps = Self::is_auto(&settings.fps);
@@ -563,7 +564,7 @@ impl Conversion {
 
         // custom audio bitrate
         if let Some(audio_br) = Self::custom_value(&settings.audio_bitrate) {
-            result.extend(["-b:a".to_string(), audio_br.to_string()]);
+            result.extend(["-b:a".to_string(), format!("{}k", audio_br)]);
         }
 
         // custom audio channels

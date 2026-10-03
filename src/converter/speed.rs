@@ -16,6 +16,13 @@ pub enum ConversionSpeed {
 }
 
 impl ConversionSpeed {
+    pub fn custom_bitrate_bps(&self) -> Option<u64> {
+        match self {
+            Self::Bitrate(kbps) => Some(u64::from(*kbps) * 1_000),
+            _ => None,
+        }
+    }
+
     pub fn to_args(&self, to: &ConverterFormat, gpu: &ConverterGPU, bitrate: u64) -> Vec<String> {
         let mut args = Vec::new();
 
@@ -108,7 +115,9 @@ impl ConversionSpeed {
             }
 
             ConverterFormat::WebM | ConverterFormat::AVI | ConverterFormat::NUT => {
-                args.push("-speed".to_string());
+                if !matches!(self, ConversionSpeed::Bitrate(_)) {
+                    args.push("-speed".to_string());
+                }
                 match self {
                     ConversionSpeed::UltraFast => args.push("4".to_string()),
                     ConversionSpeed::Fast => args.push("3".to_string()),
@@ -121,7 +130,9 @@ impl ConversionSpeed {
             }
 
             ConverterFormat::OGV | ConverterFormat::OGX => {
-                args.push("-speed".to_string());
+                if !matches!(self, ConversionSpeed::Bitrate(_)) {
+                    args.push("-speed".to_string());
+                }
                 match self {
                     ConversionSpeed::UltraFast | ConversionSpeed::Fast => {
                         args.push("2".to_string())

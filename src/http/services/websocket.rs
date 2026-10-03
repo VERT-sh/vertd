@@ -192,6 +192,21 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                 }
                 job.to = Some(to.to_string());
 
+                if let Err(e) = settings.validate() {
+                    log::warn!("invalid settings for job {}: {}", job_id, e);
+                    if !send_ws_message(
+                        &mut session,
+                        Message::Error {
+                            message: e.to_string(),
+                        },
+                    )
+                    .await
+                    {
+                        break;
+                    }
+                    continue;
+                }
+
                 log::info!("settings for job {}: {:?}", job_id, settings);
 
                 // determine speed - vertdspeedslider is 0-5, from very slow to very fast

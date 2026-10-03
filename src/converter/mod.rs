@@ -35,6 +35,55 @@ pub struct ConversionSettings {
     pub sample_rate: Option<String>,
 }
 
+impl ConversionSettings {
+    fn validate_number(value: &Option<String>, name: &str, maximum: u32) -> anyhow::Result<()> {
+        let Some(value) = value.as_deref() else {
+            return Ok(());
+        };
+        if value.is_empty() || value == "auto" {
+            return Ok(());
+        }
+        let number = value
+            .parse::<u32>()
+            .map_err(|_| anyhow!("{name} must be a positive integer"))?;
+        if number == 0 || number > maximum {
+            return Err(anyhow!("{name} must be between 1 and {maximum}"));
+        }
+        Ok(())
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        Self::validate_number(&self.fps, "fps", 240)?;
+        Self::validate_number(&self.video_bitrate, "videoBitrate (kbps)", 125_000)?;
+        Self::validate_number(&self.audio_bitrate, "audioBitrate (kbps)", 1_536)?;
+        Self::validate_number(&self.audio_channels, "audioChannels", 8)?;
+        if let Some(resolution) = self.resolution.as_deref() {
+            if !resolution.is_empty() && resolution != "auto" {
+                let (width, height) = resolution
+                    .split_once('x')
+                    .ok_or_else(|| anyhow!("resolution must use WIDTHxHEIGHT"))?;
+                let width = width
+                    .parse::<u32>()
+                    .map_err(|_| anyhow!("resolution width must be a positive integer"))?;
+                let height = height
+                    .parse::<u32>()
+                    .map_err(|_| anyhow!("resolution height must be a positive integer"))?;
+                if width == 0
+                    || height == 0
+                    || width > 8192
+                    || height > 8192
+                    || u64::from(width) * u64::from(height) > 33_554_432
+                {
+                    return Err(anyhow!(
+                        "resolution dimensions must be 1-8192 with at most 33,554,432 pixels"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 pub struct Converter {
     pub conversion: Conversion,
     speed: ConversionSpeed,
@@ -61,13 +110,14 @@ impl Converter {
         gpu: &gpu::ConverterGPU,
         vaapi_device_path: Option<&str>,
     ) -> anyhow::Result<(mpsc::Receiver<ProgressUpdate>, tokio::process::Child)> {
+        self.settings.validate()?;
         let (tx, rx) = mpsc::channel(1);
         let input_filename = format!("input/{}.{}", job.id, self.conversion.from);
         let output_filename = format!("output/{}.{}", job.id, self.conversion.to);
 
         // use custom bitrate from speed if provided, else detect from file
-        let bitrate = if let ConversionSpeed::Bitrate(b) = self.speed {
-            b as u64
+        let bitrate = if let Some(bitrate) = self.speed.custom_bitrate_bps() {
+            bitrate
         } else {
             job.bitrate().await?
         };
