@@ -93,7 +93,7 @@ async fn webhook_permanent(id: Uuid, from: String) -> anyhow::Result<()> {
     let message = message::Message::new(|m| {
         m.content(format!("🚨🚨🚨 {webhook_pings}")).embed(|e| {
             e.title("a file has been kept permanently!")
-                .description(format!("download it [here]({file_url}). please note that the link contains a secret token, and also that the file is deleted upon first download, so please agree on whoever downloads it first."))
+                .description(format!("download it [here]({file_url}). please note that the link contains a secret token, and also that the file is deleted upon first (successful full) download, so please agree on whoever downloads it first."))
                 .color(0xff83fa)
         })
     });

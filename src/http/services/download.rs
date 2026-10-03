@@ -2,6 +2,7 @@
 
 use crate::{http::response::ApiResponse, state::APP_STATE};
 use actix_web::{get, web, HttpResponse, Responder, ResponseError};
+use futures_util::StreamExt;
 use tokio::fs;
 use tokio_util::io::ReaderStream;
 
@@ -30,6 +31,38 @@ impl ResponseError for DownloadError {
         };
 
         HttpResponse::build(status).json(ApiResponse::<()>::Error(self.to_string()))
+    }
+}
+
+struct AdminDownloadGuard {
+    path: String,
+    size: u64,
+    sent: u64,
+    failed: bool,
+}
+
+impl AdminDownloadGuard {
+    fn should_delete(&self) -> bool {
+        !self.failed && self.sent == self.size
+    }
+}
+
+impl Drop for AdminDownloadGuard {
+    fn drop(&mut self) {
+        if self.should_delete() {
+            let path = self.path.clone();
+            log::info!("permanent file {} scheduled for deletion in 10 seconds", path);
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                if let Err(e) = fs::remove_file(&path).await {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        log::error!("failed to remove downloaded permanent file {}: {}", path, e);
+                    }
+                } else {
+                    log::info!("removed downloaded permanent file {}", path);
+                }
+            });
+        }
     }
 }
 
@@ -107,7 +140,23 @@ pub async fn download(path: web::Path<(String, String)>) -> Result<impl Responde
         .map_err(DownloadError::FilesystemError)?;
     let file_size = metadata.len();
 
-    let stream = ReaderStream::new(file);
+    // guard ONLY for admin downloads, deleting after all bytes sent sucessfully
+    // regular (user) downloads deleted after confirmed by vert web ui (/confirm/{id})
+    let mut guard = is_admin.then(|| AdminDownloadGuard {
+        path: file_path,
+        size: file_size,
+        sent: 0,
+        failed: false,
+    });
+    let stream = ReaderStream::new(file).map(move |chunk| {
+        if let Some(guard) = guard.as_mut() {
+            match &chunk {
+                Ok(bytes) => guard.sent += bytes.len() as u64,
+                Err(_) => guard.failed = true,
+            }
+        }
+        chunk
+    });
 
     Ok(HttpResponse::Ok()
         .insert_header(("Content-Type", "application/octet-stream"))

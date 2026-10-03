@@ -50,6 +50,33 @@ impl ResponseError for UploadError {
     }
 }
 
+// deletes the incomplete upload file if the request is dropped before the upload is complete
+struct PendingUpload {
+    path: String,
+    file: Option<File>,
+    registered: bool,
+}
+
+impl Drop for PendingUpload {
+    fn drop(&mut self) {
+        let file = self.file.take();
+        if !self.registered {
+            let path = self.path.clone();
+            tokio::spawn(async move {
+                if let Some(file) = file {
+                    drop(file.into_std().await);
+                    log::warn!("file upload interrupted, deleting incomplete upload: {}", path);
+                }
+                if let Err(e) = fs::remove_file(&path).await {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        log::error!("failed to remove incomplete upload {}: {}", path, e);
+                    }
+                }
+            });
+        }
+    }
+}
+
 #[post("/upload")]
 pub async fn upload(mut payload: Multipart) -> Result<impl Responder, UploadError> {
     let mut job: Option<Job> = None;
@@ -91,18 +118,21 @@ pub async fn upload(mut payload: Multipart) -> Result<impl Responder, UploadErro
         let our_job = Job::new(token, ext.to_string());
         job = Some(our_job.clone());
 
-        info!("new file upload: {}", our_job.id);
+        info!("new file upload: {}.{}", our_job.id, ext);
 
         let input_path = format!("input/{}.{}", our_job.id, ext);
-        let mut file = File::create(&input_path).await?;
+        let mut pending = PendingUpload {
+            path: input_path.clone(),
+            file: None,
+            registered: false,
+        };
+        pending.file = Some(File::from_std(std::fs::File::create(&input_path)?));
         let mut uploaded_bytes = 0usize;
         while let Some(chunk) = field.next().await {
             let data = chunk?;
             uploaded_bytes += data.len();
             if let Some(limit) = *MAX_UPLOAD_BYTES {
                 if uploaded_bytes > limit {
-                    drop(file);
-                    let _ = fs::remove_file(&input_path).await;
                     warn!(
                         "uploaded file {} exceeded max size limit ({} bytes), rejecting upload",
                         our_job.id, limit
@@ -111,11 +141,11 @@ pub async fn upload(mut payload: Multipart) -> Result<impl Responder, UploadErro
                 }
             }
 
-            file.write_all(&data).await?;
+            pending.file.as_mut().unwrap().write_all(&data).await?;
         }
 
-        file.flush().await?;
-        drop(file);
+        pending.file.as_mut().unwrap().flush().await?;
+        drop(pending.file.take());
 
         info!(
             "file uploaded successfully ({} bytes): {}",
@@ -138,6 +168,7 @@ pub async fn upload(mut payload: Multipart) -> Result<impl Responder, UploadErro
                 .await
                 .ok();
         });
+        pending.registered = true; // file fully uploaded, so marked as registered to avoid deletion
         break;
     }
     let mut job = job.ok_or_else(|| UploadError::NoFile)?;
