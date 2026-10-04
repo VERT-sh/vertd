@@ -44,7 +44,7 @@ fn bind_dual_stack(port: u16) -> std::io::Result<TcpListener> {
     Ok(listener)
 }
 
-pub async fn start_http() -> anyhow::Result<()> {
+pub async fn start_http() -> anyhow::Result<actix_web::dev::Server> {
     let server = HttpServer::new(|| {
         App::new()
             .wrap(
@@ -67,11 +67,11 @@ pub async fn start_http() -> anyhow::Result<()> {
                     .service(keep),
             )
     });
+    let port = std::env::var("PORT").unwrap_or_else(|_| "24153".to_string());
     let port: u16 = port
         .parse()
         .map_err(|_| anyhow::anyhow!("PORT must be a number between 0 and 65535"))?;
     let listener = bind_dual_stack(port)?;
     info!("http server listening on {}", listener.local_addr()?);
-    let server = server.bind(ip)?;
-    Ok(server.run())
+    Ok(server.listen(listener)?.run())
 }
