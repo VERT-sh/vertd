@@ -1,6 +1,7 @@
 use log::warn;
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
+use tokio::sync::OnceCell;
 use uuid::Uuid;
 
 fn validate_ffprobe_output(
@@ -32,9 +33,34 @@ pub struct Job {
     total_frames: Option<u64>,
     bitrate: Option<u64>,
     fps: Option<u32>,
+    #[serde(skip)]
+    video: OnceCell<VideoProbe>,
+    #[serde(skip)]
+    audio: OnceCell<Vec<AudioStream>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct VideoProbe {
+    #[serde(default)]
+    codec_name: String,
+    #[serde(default)]
+    width: u32,
+    #[serde(default)]
+    height: u32,
+    #[serde(default)]
+    pix_fmt: String,
+    #[serde(default)]
+    r_frame_rate: String,
+    #[serde(default)]
+    bit_rate: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Streams<T> {
+    streams: Vec<T>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct AudioStream {
     pub index: u32,
     #[serde(default)]
@@ -59,6 +85,8 @@ impl Job {
             total_frames: None,
             bitrate: None,
             fps: None,
+            video: OnceCell::new(),
+            audio: OnceCell::new(),
         }
     }
 
@@ -92,29 +120,8 @@ impl Job {
             return Ok(bitrate);
         }
 
-        let output = Command::new("ffprobe")
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=bit_rate",
-                "-of",
-                "default=nokey=1:noprint_wrappers=1",
-                &format!("input/{}.{}", self.id, self.from),
-            ])
-            .output()
-            .await?;
-
-        validate_ffprobe_output(
-            &output,
-            &format!("input/{}.{}", self.id, self.from),
-            "reading bitrate",
-        )?;
-
-        // use the detected bitrate unless it exceeds the resolution-based default
-        let (width, height) = self.resolution().await?;
+        let probe = self.video_probe().await?;
+        let (width, height) = (probe.width, probe.height);
         let default_bitrate = match (width, height) {
             (w, h) if w >= 3840 || h >= 2160 => 30_000_000, // >4K - 30 Mbps
             (w, h) if w >= 2560 || h >= 1440 => 14_000_000, // >2K - 14 Mbps
@@ -123,8 +130,11 @@ impl Job {
             _ => 1_500_000,                                 // <SD - 1.5 Mbps
         };
 
-        let bitrate = String::from_utf8(output.stdout)?.trim().parse::<u64>().ok();
-        if let Some(bitrate_value) = bitrate {
+        let bitrate_value = probe
+            .bit_rate
+            .as_deref()
+            .and_then(|b| b.trim().parse::<u64>().ok());
+        if let Some(bitrate_value) = bitrate_value {
             let bitrate = bitrate_value.min(default_bitrate);
             self.bitrate = Some(bitrate);
 
@@ -185,34 +195,11 @@ impl Job {
             return Ok(fps);
         }
 
-        let path = format!("input/{}.{}", self.id, self.from);
-
-        let output = Command::new("ffprobe")
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=r_frame_rate",
-                "-of",
-                "default=nokey=1:noprint_wrappers=1",
-                &path,
-            ])
-            .output()
-            .await?;
-
-        validate_ffprobe_output(&output, &path, "reading fps")?;
-
-        let fps_out = String::from_utf8(output.stdout)?;
-        let fps_trim = fps_out
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .map(|s| s.trim())
-            .unwrap_or("");
+        let probe = self.video_probe().await?;
+        let fps_trim = probe.r_frame_rate.trim();
 
         if fps_trim.is_empty() {
-            warn!("ffprobe returned empty fps for {}", path);
+            warn!("ffprobe returned empty fps for job {}", self.id);
             let default = 30u32;
             self.fps = Some(default);
             return Ok(default);
@@ -229,10 +216,7 @@ impl Job {
         };
 
         let result = parsed.unwrap_or_else(|| {
-            warn!(
-                "failed to parse fps '{}' from ffprobe for {}",
-                fps_trim, path
-            );
+            warn!("failed to parse fps '{}' from ffprobe", fps_trim);
             30u32
         });
 
@@ -240,151 +224,104 @@ impl Job {
         Ok(result)
     }
 
-    pub async fn bitrate_and_fps(&mut self) -> anyhow::Result<(u64, u32)> {
-        let (bitrate, fps) = (self.bitrate().await?, self.fps().await?);
-        Ok((bitrate, fps))
-    }
-
     pub async fn resolution(&self) -> anyhow::Result<(u32, u32)> {
-        let path = format!("input/{}.{}", self.id, self.from);
-
-        let output = Command::new("ffprobe")
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=width,height",
-                "-of",
-                "csv=s=x:p=0",
-                &path,
-            ])
-            .output()
-            .await?;
-
-        validate_ffprobe_output(&output, &path, "reading resolution")?;
-
-        let res_out = String::from_utf8(output.stdout)?;
-        let res_str = res_out
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .map(|s| s.trim())
-            .ok_or_else(|| {
-                anyhow::anyhow!("failed to get resolution from ffprobe output: {}", res_out)
-            })?;
-        let mut parts = res_str.split('x');
-        let width = parts
-            .next()
-            .ok_or_else(|| {
-                anyhow::anyhow!("failed to get width from ffprobe output: '{}'", res_str)
-            })?
-            .trim()
-            .parse::<u32>()?;
-        let height = parts
-            .next()
-            .ok_or_else(|| {
-                anyhow::anyhow!("failed to get height from ffprobe output: '{}'", res_str)
-            })?
-            .trim()
-            .parse::<u32>()?;
-
-        Ok((width, height))
+        let probe = self.video_probe().await?;
+        if probe.width == 0 || probe.height == 0 {
+            anyhow::bail!(
+                "failed to get resolution from ffprobe output for job {}",
+                self.id
+            );
+        }
+        Ok((probe.width, probe.height))
     }
 
     pub async fn pix_fmt(&self) -> anyhow::Result<String> {
-        let path = format!("input/{}.{}", self.id, self.from);
+        let probe = self.video_probe().await?;
+        if probe.pix_fmt.is_empty() {
+            anyhow::bail!(
+                "failed to get pixel format from ffprobe output for job {}",
+                self.id
+            );
+        }
+        Ok(probe.pix_fmt.clone())
+    }
 
-        let output = Command::new("ffprobe")
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=pix_fmt",
-                "-of",
-                "default=nokey=1:noprint_wrappers=1",
-                &path,
-            ])
-            .output()
-            .await?;
+    async fn video_probe(&self) -> anyhow::Result<&VideoProbe> {
+        self.video
+            .get_or_try_init(|| async {
+                let path = format!("input/{}.{}", self.id, self.from);
+                let output = Command::new("ffprobe")
+                    .args([
+                        "-v",
+                        "error",
+                        "-select_streams",
+                        "v:0",
+                        "-show_entries",
+                        "stream=codec_name,width,height,pix_fmt,r_frame_rate,bit_rate",
+                        "-of",
+                        "json",
+                        &path,
+                    ])
+                    .output()
+                    .await?;
 
-        validate_ffprobe_output(&output, &path, "reading pixel format")?;
-
-        let pix_out = String::from_utf8(output.stdout)?;
-        let pix = pix_out
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .map(|s| s.trim().to_string())
-            .ok_or_else(|| anyhow::anyhow!("failed to get pixel format from ffprobe output"))?;
-
-        Ok(pix)
+                validate_ffprobe_output(&output, &path, "reading video metadata")?;
+                let probe: Streams<VideoProbe> =
+                    serde_json::from_slice(&output.stdout).map_err(|error| {
+                        anyhow::anyhow!("invalid video metadata for {}: {}", path, error)
+                    })?;
+                let video = probe.streams.into_iter().next().unwrap_or_default();
+                Ok(video)
+            })
+            .await
     }
 
     pub async fn audio_streams(&self) -> anyhow::Result<Vec<AudioStream>> {
-        #[derive(Deserialize)]
-        struct Probe {
-            streams: Vec<AudioStream>,
-        }
+        Ok(self.audio_streams_probe().await?.clone())
+    }
 
-        let path = format!("input/{}.{}", self.id, self.from);
-        let output = Command::new("ffprobe")
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "a",
-                "-show_entries",
-                "stream=index,codec_name",
-                "-of",
-                "json",
-                &path,
-            ])
-            .output()
-            .await?;
-        validate_ffprobe_output(&output, &path, "reading all audio streams")?;
-        let probe: Probe = serde_json::from_slice(&output.stdout).map_err(|error| {
-            anyhow::anyhow!("invalid audio stream metadata for {}: {}", path, error)
-        })?;
-        Ok(probe.streams)
+    async fn audio_streams_probe(&self) -> anyhow::Result<&Vec<AudioStream>> {
+        self.audio
+            .get_or_try_init(|| async {
+                let path = format!("input/{}.{}", self.id, self.from);
+                let output = Command::new("ffprobe")
+                    .args([
+                        "-v",
+                        "error",
+                        "-select_streams",
+                        "a",
+                        "-show_entries",
+                        "stream=index,codec_name",
+                        "-of",
+                        "json",
+                        &path,
+                    ])
+                    .output()
+                    .await?;
+                validate_ffprobe_output(&output, &path, "reading all audio streams")?;
+                let probe: Streams<AudioStream> =
+                    serde_json::from_slice(&output.stdout).map_err(|error| {
+                        anyhow::anyhow!("invalid audio stream metadata for {}: {}", path, error)
+                    })?;
+                Ok(probe.streams)
+            })
+            .await
     }
 
     // codecs.0 = video codec, codecs.1 = audio codec
     pub async fn codecs(&self) -> anyhow::Result<(String, String)> {
-        let path = format!("input/{}.{}", self.id, self.from);
+        let video_codec = self.video_probe().await?.codec_name.to_lowercase();
+        let video_codec = if video_codec.is_empty() {
+            "none".to_string()
+        } else {
+            video_codec
+        };
 
-        // Video codec
-        let output = Command::new("ffprobe")
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=codec_name",
-                "-of",
-                "default=nokey=1:noprint_wrappers=1",
-                &path,
-            ])
-            .output()
-            .await?;
-
-        validate_ffprobe_output(&output, &path, "reading video codec")?;
-
-        let video_codec = String::from_utf8(output.stdout)?
-            .lines()
-            .next()
-            .unwrap_or("none")
-            .to_string();
-
-        // Audio codec
         let audio_codec = self
-            .audio_streams()
+            .audio_streams_probe()
             .await?
-            .into_iter()
-            .next()
-            .map_or_else(|| "none".to_string(), |stream| stream.codec_name);
+            .first()
+            .map_or_else(|| "none".to_string(), |stream| stream.codec_name.clone());
 
         Ok((video_codec, audio_codec))
     }

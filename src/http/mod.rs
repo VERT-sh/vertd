@@ -15,7 +15,7 @@ use crate::http::services::keep::keep;
 mod response;
 mod services;
 
-pub async fn start_http() -> anyhow::Result<()> {
+pub async fn start_http() -> anyhow::Result<actix_web::dev::Server> {
     let server = HttpServer::new(|| {
         App::new()
             .wrap(
@@ -44,6 +44,6 @@ pub async fn start_http() -> anyhow::Result<()> {
     }
     let ip = format!("0.0.0.0:{}", port);
     info!("http server listening on {}", ip);
-    server.bind(ip)?.run().await?;
-    Ok(())
+    let server = server.bind(ip)?;
+    Ok(server.run())
 }

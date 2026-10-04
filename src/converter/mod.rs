@@ -163,7 +163,7 @@ impl Converter {
                 "pipe:1",
             ][..],
             &gpu_args_refs[..],
-            self.conversion.to.input_format_args(),
+            self.conversion.from.input_format_args(),
             &["-i", &input_filename][..],
             args,
             metadata_args,

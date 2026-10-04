@@ -230,6 +230,8 @@ async fn main() -> anyhow::Result<()> {
         app_state.supported_accelerated_codecs = accelerated_codecs;
     }
 
+    let server = start_http().await?;
+
     // remove input/ and output/ recursively if they exist -- we don't care if this fails tho
     let _ = fs::remove_dir_all("input").await;
     let _ = fs::remove_dir_all("output").await;
@@ -255,7 +257,7 @@ async fn main() -> anyhow::Result<()> {
         info!("no max upload size set - unlimited size allowed");
     }
 
-    start_http().await?;
+    server.await?;
     Ok(())
 }
 
