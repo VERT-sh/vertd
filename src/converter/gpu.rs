@@ -172,8 +172,28 @@ impl Display for ConverterGPU {
 
 async fn is_docker() -> bool {
     let dockerenv = tokio::fs::metadata("/.dockerenv").await.is_ok();
-    let cgroup = tokio::fs::metadata("/proc/1/cgroup").await.is_ok();
-    dockerenv || cgroup
+    if dockerenv {
+        return true;
+    }
+
+    let cgroup = tokio::fs::read_to_string("/proc/self/cgroup").await.ok();
+    let mountinfo = tokio::fs::read_to_string("/proc/self/mountinfo").await.ok();
+    is_container_markers(cgroup.as_deref(), mountinfo.as_deref())
+}
+
+const DOCKER_CGROUP_MARKERS: [&str; 3] = ["docker", "containerd", "kubepods"];
+
+fn is_container_markers(cgroup: Option<&str>, mountinfo: Option<&str>) -> bool {
+    if let Some(cgroup) = cgroup {
+        if DOCKER_CGROUP_MARKERS
+            .iter()
+            .any(|marker| cgroup.contains(marker))
+        {
+            return true;
+        }
+    }
+
+    mountinfo.is_some_and(|mountinfo| mountinfo.contains("/docker/containers/"))
 }
 
 pub async fn get_gpu() -> anyhow::Result<ConverterGPU> {
