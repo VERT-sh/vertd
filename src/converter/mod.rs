@@ -37,6 +37,15 @@ pub struct ConversionSettings {
 
 impl ConversionSettings {
     fn validate_number(value: &Option<String>, name: &str, maximum: u32) -> anyhow::Result<()> {
+        Self::validate_number_range(value, name, 1, maximum)
+    }
+
+    fn validate_number_range(
+        value: &Option<String>,
+        name: &str,
+        minimum: u32,
+        maximum: u32,
+    ) -> anyhow::Result<()> {
         let Some(value) = value.as_deref() else {
             return Ok(());
         };
@@ -46,8 +55,8 @@ impl ConversionSettings {
         let number = value
             .parse::<u32>()
             .map_err(|_| anyhow!("{name} must be a positive integer"))?;
-        if number == 0 || number > maximum {
-            return Err(anyhow!("{name} must be between 1 and {maximum}"));
+        if number < minimum || number > maximum {
+            return Err(anyhow!("{name} must be between {minimum} and {maximum}"));
         }
         Ok(())
     }
@@ -57,6 +66,8 @@ impl ConversionSettings {
         Self::validate_number(&self.video_bitrate, "videoBitrate (kbps)", 125_000)?;
         Self::validate_number(&self.audio_bitrate, "audioBitrate (kbps)", 1_536)?;
         Self::validate_number(&self.audio_channels, "audioChannels", 8)?;
+        Self::validate_number_range(&self.sample_rate, "sampleRate (Hz)", 8_000, 384_000)?;
+
         if let Some(resolution) = self.resolution.as_deref() {
             if !resolution.is_empty() && resolution != "auto" {
                 let (width, height) = resolution

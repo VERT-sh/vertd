@@ -16,6 +16,10 @@ pub enum KeepError {
     InvalidToken,
     #[error("job is not in an error state")]
     NotErrored,
+    #[error(
+        "keeping files is not configured (missing WEBHOOK_URL, PUBLIC_URL, or ADMIN_PASSWORD)"
+    )]
+    NotConfigured,
     #[error("filesystem error: {0}")]
     FilesystemError(#[from] std::io::Error),
 }
@@ -32,11 +36,29 @@ impl ResponseError for KeepError {
             KeepError::JobNotFound => actix_web::http::StatusCode::NOT_FOUND,
             KeepError::NotErrored => actix_web::http::StatusCode::BAD_REQUEST,
             KeepError::InvalidToken => actix_web::http::StatusCode::UNAUTHORIZED,
+            KeepError::NotConfigured => actix_web::http::StatusCode::SERVICE_UNAVAILABLE,
             KeepError::FilesystemError(_) => actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
         };
 
         HttpResponse::build(status).json(ApiResponse::<()>::Error(self.to_string()))
     }
+}
+
+fn keep_configuration() -> Result<(String, String, String), KeepError> {
+    let webhook_url = std::env::var("WEBHOOK_URL")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .ok_or(KeepError::NotConfigured)?;
+    let public_url = std::env::var("PUBLIC_URL")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .ok_or(KeepError::NotConfigured)?;
+    // empty/default admin password disables download (see download.rs), so reject it
+    let admin_password = std::env::var("ADMIN_PASSWORD")
+        .ok()
+        .filter(|v| !v.is_empty() && v != "supersecret")
+        .ok_or(KeepError::NotConfigured)?;
+    Ok((webhook_url, public_url, admin_password))
 }
 
 // i am only now starting to realise how poorly designed i made this api
@@ -57,6 +79,9 @@ pub async fn keep(body: Json<KeepRequest>) -> Result<impl Responder, KeepError> 
         return Err(KeepError::InvalidToken);
     }
 
+    // fail before moving the file if we can't build a usable download link
+    let (webhook_url, public_url, admin_password) = keep_configuration()?;
+
     // move the file from temp to permanent storage
     let current_path = format!("input/{}.{}", job_id, job_from);
     let permanent_path = format!("permanent/{}.{}", job_id, job_from);
@@ -72,7 +97,7 @@ pub async fn keep(body: Json<KeepRequest>) -> Result<impl Responder, KeepError> 
     let from = job_from;
 
     tokio::spawn(async move {
-        if let Err(e) = webhook_permanent(id, from).await {
+        if let Err(e) = webhook_permanent(id, from, webhook_url, public_url, admin_password).await {
             log::error!("failed to send permanent webhook: {}", e);
         }
     });
@@ -80,11 +105,14 @@ pub async fn keep(body: Json<KeepRequest>) -> Result<impl Responder, KeepError> 
     Ok("{}")
 }
 
-async fn webhook_permanent(id: Uuid, from: String) -> anyhow::Result<()> {
-    let webhook_url = std::env::var("WEBHOOK_URL")?;
+async fn webhook_permanent(
+    id: Uuid,
+    from: String,
+    webhook_url: String,
+    public_url: String,
+    admin_password: String,
+) -> anyhow::Result<()> {
     let webhook_pings = std::env::var("WEBHOOK_PINGS").unwrap_or_default();
-    let admin_password = std::env::var("ADMIN_PASSWORD")?;
-    let public_url = std::env::var("PUBLIC_URL")?;
 
     let file_url = format!("{public_url}/api/download/{id}.{from}/{admin_password}");
 

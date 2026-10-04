@@ -344,7 +344,7 @@ impl Conversion {
 
         let input_codecs = job.codecs().await?;
         let audio_streams = job.audio_streams().await?;
-        let input_pix_fmt = job.pix_fmt().await.unwrap_or_default();
+        let input_pix_fmt = job.pix_fmt().await?;
         let input_video_codec = input_codecs.0.to_lowercase();
         let has_usable_audio = !audio_streams.is_empty();
         let has_alpha = input_pix_fmt.starts_with("yuva")

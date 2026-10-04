@@ -119,7 +119,6 @@ pub async fn upload(mut payload: Multipart) -> Result<impl Responder, UploadErro
         let rand: [u8; 64] = rand::random();
         let token = hex::encode(rand);
         let our_job = Job::new(token, ext.to_string());
-        job = Some(our_job.clone());
 
         info!("new file upload: {}.{}", our_job.id, ext);
 
@@ -155,8 +154,17 @@ pub async fn upload(mut payload: Multipart) -> Result<impl Responder, UploadErro
             uploaded_bytes, our_job.id
         );
 
-        let mut app_state = APP_STATE.lock().await;
-        app_state.jobs.insert(our_job.id, our_job.clone());
+        let mut validated = our_job.clone();
+        if let Err(e) = validated.total_frames().await {
+            warn!("failed to validate uploaded file {}: {}", our_job.id, e);
+            return Err(UploadError::ParseFile(e));
+        }
+        job = Some(validated);
+
+        {
+            let mut app_state = APP_STATE.lock().await;
+            app_state.jobs.insert(our_job.id, our_job.clone());
+        }
         // spawn a new task which waits an hour before removing the job
         tokio::spawn(async move {
             tokio::time::sleep(crate::INPUT_LIFETIME).await;
@@ -165,16 +173,21 @@ pub async fn upload(mut payload: Multipart) -> Result<impl Responder, UploadErro
                 crate::INPUT_LIFETIME,
                 our_job.id
             );
-            let mut app_state = APP_STATE.lock().await;
-            app_state.jobs.remove(&our_job.id);
-            fs::remove_file(format!("input/{}.{}", our_job.id, ext))
-                .await
-                .ok();
+            let removed = {
+                let mut app_state = APP_STATE.lock().await;
+                app_state.jobs.remove(&our_job.id)
+            };
+            if removed.is_some() {
+                if let Err(e) = fs::remove_file(format!("input/{}.{}", our_job.id, ext)).await {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        log::error!("failed to remove expired input {}: {}", our_job.id, e);
+                    }
+                }
+            }
         });
         pending.registered = true; // file fully uploaded, so marked as registered to avoid deletion
         break;
     }
-    let mut job = job.ok_or_else(|| UploadError::NoFile)?;
-    job.total_frames().await?;
+    let job = job.ok_or_else(|| UploadError::NoFile)?;
     Ok(ApiResponse::Success(job))
 }

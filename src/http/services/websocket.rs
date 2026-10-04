@@ -88,7 +88,21 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
         .max_continuation_size(2_usize.pow(20));
 
     rt::spawn(async move {
-        while let Some(Ok(AggregatedMessage::Text(text))) = stream.next().await {
+        loop {
+            let text = match stream.next().await {
+                Some(Ok(AggregatedMessage::Text(text))) => text,
+                Some(Ok(AggregatedMessage::Ping(payload))) => {
+                    if session.pong(&payload).await.is_err() {
+                        break;
+                    }
+                    continue;
+                }
+                Some(Ok(AggregatedMessage::Pong(_))) => continue,
+                Some(Ok(AggregatedMessage::Close(_))) | None => break,
+                Some(Ok(_)) => continue, // ignore binary/continuation frames we don't use
+                Some(Err(_)) => break, // transport error
+            };
+
             let message: Message = match serde_json::from_str(&text) {
                 Ok(message) => message,
                 Err(e) => {
@@ -406,29 +420,37 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                             }
 
                             new_message = stream.next() => {
-                                if let Some(Ok(AggregatedMessage::Text(text))) = new_message {
-                                    if let Ok(Message::CancelJob { token: cancel_token, job_id: cancel_job_id }) = serde_json::from_str::<Message>(&text) {
-                                        if cancel_job_id == job_id && cancel_token == token {
-                                            log::info!("cancelling job {}", job_id);
-                                            job_cancelled = true;
+                                match new_message {
+                                    Some(Ok(AggregatedMessage::Text(text))) => {
+                                        if let Ok(Message::CancelJob { token: cancel_token, job_id: cancel_job_id }) = serde_json::from_str::<Message>(&text) {
+                                            if cancel_job_id == job_id && cancel_token == token {
+                                                log::info!("cancelling job {}", job_id);
+                                                job_cancelled = true;
 
-                                            let _ = send_ws_message(&mut session, Message::JobCancelled { job_id }).await;
+                                                let _ = send_ws_message(&mut session, Message::JobCancelled { job_id }).await;
 
-                                            break;
-                                        } else if !send_ws_message(
-                                            &mut session,
-                                            Message::Error {
-                                                message: "invalid token or job id for cancellation".to_string(),
-                                            },
-                                        )
-                                        .await
-                                        {
+                                                break;
+                                            } else if !send_ws_message(
+                                                &mut session,
+                                                Message::Error {
+                                                    message: "invalid token or job id for cancellation".to_string(),
+                                                },
+                                            )
+                                            .await
+                                            {
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    Some(Ok(AggregatedMessage::Ping(payload))) => {
+                                        if session.pong(&payload).await.is_err() {
                                             break;
                                         }
                                     }
-                                } else if !matches!(new_message, Some(Ok(_))) {
-                                    // ws closed or errored
-                                    break;
+                                    Some(Ok(AggregatedMessage::Pong(_))) => {}
+                                    // close or transport error/end, stop converting
+                                    Some(Ok(AggregatedMessage::Close(_))) | Some(Err(_)) | None => break,
+                                    Some(Ok(_)) => {}
                                 }
                             }
                         }
@@ -482,21 +504,35 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                             tokio::select! {
                                 exit = process.wait() => break exit,
                                 message = stream.next() => {
-                                    let cancel = match &message {
+                                    let mut terminate = false;
+                                    match &message {
                                         Some(Ok(AggregatedMessage::Text(text))) => {
-                                            matches!(serde_json::from_str::<Message>(text),
+                                            let cancel = matches!(serde_json::from_str::<Message>(text),
                                                 Ok(Message::CancelJob { token: cancel_token, job_id: cancel_id })
-                                                if cancel_token == token && cancel_id == job_id)
+                                                if cancel_token == token && cancel_id == job_id);
+                                            if cancel {
+                                                job_cancelled = true;
+                                                terminate = true;
+                                            }
                                         }
-                                        _ => false,
-                                    };
-                                    if cancel || !matches!(message, Some(Ok(_))) {
-                                        job_cancelled = cancel;
-                                        disconnected_while_waiting = !cancel;
+                                        Some(Ok(AggregatedMessage::Ping(payload))) => {
+                                            if session.pong(payload).await.is_err() {
+                                                disconnected_while_waiting = true;
+                                                terminate = true;
+                                            }
+                                        }
+                                        Some(Ok(AggregatedMessage::Pong(_))) => {}
+                                        Some(Ok(AggregatedMessage::Close(_))) | Some(Err(_)) | None => {
+                                            disconnected_while_waiting = true;
+                                            terminate = true;
+                                        }
+                                        Some(Ok(_)) => {}
+                                    }
+                                    if terminate {
                                         if let Err(e) = process.kill().await {
                                             log::error!("failed to kill waiting process for job {}: {}", job_id, e);
                                         }
-                                        if cancel {
+                                        if job_cancelled {
                                             let _ = send_ws_message(&mut session, Message::JobCancelled { job_id }).await;
                                         }
                                         break process.wait().await;
