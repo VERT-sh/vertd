@@ -67,6 +67,18 @@ async fn send_ws_message(session: &mut actix_ws::Session, message: Message) -> b
     }
 }
 
+const WS_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+async fn send_ws_message_timeout(session: &mut actix_ws::Session, message: Message) -> bool {
+    match tokio::time::timeout(WS_SEND_TIMEOUT, send_ws_message(session, message)).await {
+        Ok(ok) => ok,
+        Err(_) => {
+            log::warn!("websocket send timed out, closing connection");
+            false
+        }
+    }
+}
+
 #[get("/ws")]
 pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
     let (res, mut session, stream) = actix_ws::handle(&req, stream)?;
@@ -102,29 +114,30 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                 settings,
             } = message
             {
-                let Some(mut job) = ({
+                let (job_clone, already_completed) = {
                     let app_state = APP_STATE.lock().await;
-                    let job = app_state.jobs.get(&job_id);
-                    let clone = job.cloned();
-                    if let Some(job) = job {
-                        if job.completed() {
-                            if !send_ws_message(
-                                &mut session,
-                                Message::Error {
-                                    message: "job already completed".to_string(),
-                                },
-                            )
-                            .await
-                            {
-                                break;
-                            }
+                    match app_state.jobs.get(&job_id) {
+                        Some(job) => (Some(job.clone()), job.completed()),
+                        None => (None, false),
+                    }
+                };
 
-                            continue;
-                        }
+                if already_completed {
+                    if !send_ws_message(
+                        &mut session,
+                        Message::Error {
+                            message: "job already completed".to_string(),
+                        },
+                    )
+                    .await
+                    {
+                        break;
                     }
 
-                    clone
-                }) else {
+                    continue;
+                }
+
+                let Some(mut job) = job_clone else {
                     if !send_ws_message(
                         &mut session,
                         Message::Error {
@@ -270,44 +283,86 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                 }
                 job.to = Some(to.to_string());
 
-                let (mut rx, process) = match converter
-                    .convert(&mut job, &gpu, vaapi_device_path.as_deref())
-                    .await
-                {
-                    Ok((rx, process)) => (rx, process),
-                    Err(e) => {
-                        // remove job if somehow job never was able to start
-                        if let Some(job) = APP_STATE.lock().await.jobs.get_mut(&job_id) {
-                            job.state = JobState::Failed;
-                        }
-                        let output_path = format!("output/{}.{}", job_id, to);
-                        tokio::spawn(async move {
-                            tokio::time::sleep(OUTPUT_LIFETIME).await;
-                            APP_STATE.lock().await.jobs.remove(&job_id);
-                            if let Err(e) = fs::remove_file(&output_path).await {
-                                if e.kind() != ErrorKind::NotFound {
-                                    log::error!(
-                                        "failed to remove setup-failure output {}: {}",
-                                        output_path,
-                                        e
-                                    );
+                let (convert_result, setup_cancelled) = {
+                    let setup = converter.convert(&mut job, &gpu, vaapi_device_path.as_deref());
+                    tokio::pin!(setup);
+                    let mut cancelled = false;
+                    let result = loop {
+                        tokio::select! {
+                            result = &mut setup => break Some(result),
+                            message = stream.next() => {
+                                match &message {
+                                    Some(Ok(AggregatedMessage::Text(text))) => {
+                                        if let Ok(Message::CancelJob { token: cancel_token, job_id: cancel_id }) =
+                                            serde_json::from_str::<Message>(text)
+                                        {
+                                            if cancel_token == token && cancel_id == job_id {
+                                                cancelled = true;
+                                                break None;
+                                            }
+                                        }
+                                    }
+                                    Some(Ok(_)) => {} // ignore non-text/control frames during setup
+                                    _ => break None, // disconnected/errored
                                 }
                             }
-                        });
-                        if !send_ws_message(
-                            &mut session,
-                            Message::Error {
-                                message: format!("failed to convert: {}", e),
-                            },
-                        )
-                        .await
-                        {
-                            break;
                         }
-
-                        continue;
-                    }
+                    };
+                    (result, cancelled)
                 };
+
+                if convert_result.is_none() {
+                    // cancelled / disconnected during setup, clean up
+                    APP_STATE.lock().await.jobs.remove(&job_id);
+                    if let Err(e) = fs::remove_file(&format!("input/{}.{}", job.id, job.from)).await
+                    {
+                        if e.kind() != ErrorKind::NotFound {
+                            log::error!("failed to remove input after setup cancellation: {}", e);
+                        }
+                    }
+                    if setup_cancelled {
+                        let _ =
+                            send_ws_message(&mut session, Message::JobCancelled { job_id }).await;
+                    }
+                    continue;
+                }
+
+                let (mut rx, process) =
+                    match convert_result.expect("setup result set when not cancelled") {
+                        Ok((rx, process)) => (rx, process),
+                        Err(e) => {
+                            // remove job if somehow job never was able to start
+                            if let Some(job) = APP_STATE.lock().await.jobs.get_mut(&job_id) {
+                                job.state = JobState::Failed;
+                            }
+                            let output_path = format!("output/{}.{}", job_id, to);
+                            tokio::spawn(async move {
+                                tokio::time::sleep(OUTPUT_LIFETIME).await;
+                                APP_STATE.lock().await.jobs.remove(&job_id);
+                                if let Err(e) = fs::remove_file(&output_path).await {
+                                    if e.kind() != ErrorKind::NotFound {
+                                        log::error!(
+                                            "failed to remove setup-failure output {}: {}",
+                                            output_path,
+                                            e
+                                        );
+                                    }
+                                }
+                            });
+                            if !send_ws_message(
+                                &mut session,
+                                Message::Error {
+                                    message: format!("failed to convert: {}", e),
+                                },
+                            )
+                            .await
+                            {
+                                break;
+                            }
+
+                            continue;
+                        }
+                    };
 
                 let mut logs = Vec::new();
                 let mut fallback_logs = Vec::new();
@@ -338,7 +393,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                         }
                                     }
                                     Some(progress) => {
-                                        if !send_ws_message(&mut session, Message::ProgressUpdate(progress)).await {
+                                        if !send_ws_message_timeout(&mut session, Message::ProgressUpdate(progress)).await {
                                             break;
                                         }
                                     }

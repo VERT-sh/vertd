@@ -14,6 +14,7 @@ use tokio::{fs, process::Command};
 
 pub const INPUT_LIFETIME: Duration = Duration::from_secs(60 * 60);
 pub const OUTPUT_LIFETIME: Duration = Duration::from_secs(60 * 60);
+pub const GPU_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 
 enum FFUtil {
     FFmpeg,
@@ -296,29 +297,43 @@ async fn check_accelerated_codecs(
             .spawn();
 
         match process {
-            Ok(child) => match child.wait_with_output().await {
-                Ok(output) => {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    if !stderr.contains("Error while opening encoder") && output.status.success() {
-                        supported.push(codec.to_string());
-                    } else {
+            Ok(child) => {
+                // don't let slow / non-responsive drivers stall startup
+                match tokio::time::timeout(GPU_PROBE_TIMEOUT, child.wait_with_output()).await {
+                    Ok(Ok(output)) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        if !stderr.contains("Error while opening encoder")
+                            && output.status.success()
+                        {
+                            supported.push(codec.to_string());
+                        } else {
+                            warn!(
+                                "accelerated probe failed for {} ({}): {}",
+                                codec,
+                                encoder,
+                                stderr.trim()
+                            );
+                            unsupported.push(codec.to_string());
+                        }
+                    }
+                    Ok(Err(e)) => {
                         warn!(
-                            "accelerated probe failed for {} ({}): {}",
+                            "failed to wait on ffmpeg process for codec {}: {}",
+                            codec, e
+                        );
+                        unsupported.push(codec.to_string());
+                    }
+                    Err(_) => {
+                        warn!(
+                            "accelerated probe for {} ({}) timed out after {}s",
                             codec,
                             encoder,
-                            stderr.trim()
+                            GPU_PROBE_TIMEOUT.as_secs()
                         );
                         unsupported.push(codec.to_string());
                     }
                 }
-                Err(e) => {
-                    warn!(
-                        "failed to wait on ffmpeg process for codec {}: {}",
-                        codec, e
-                    );
-                    unsupported.push(codec.to_string());
-                }
-            },
+            }
             Err(e) => {
                 warn!("failed to execute ffmpeg for codec {}: {}", codec, e);
                 unsupported.push(codec.to_string());

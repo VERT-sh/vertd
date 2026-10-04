@@ -111,7 +111,7 @@ impl Converter {
         vaapi_device_path: Option<&str>,
     ) -> anyhow::Result<(mpsc::Receiver<ProgressUpdate>, tokio::process::Child)> {
         self.settings.validate()?;
-        let (tx, rx) = mpsc::channel(1);
+        let (tx, rx) = mpsc::channel(256);
         let input_filename = format!("input/{}.{}", job.id, self.conversion.from);
         let output_filename = format!("output/{}.{}", job.id, self.conversion.to);
 
@@ -217,8 +217,8 @@ impl Converter {
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 error!("{}", line);
-                if tx.send(ProgressUpdate::Error(line)).await.is_err() {
-                    break;
+                if tx.try_send(ProgressUpdate::Error(line)).is_err() {
+                    continue;
                 }
             }
         });
@@ -252,8 +252,8 @@ impl Converter {
                 }
 
                 for report in reports {
-                    if tx.send(report).await.is_err() {
-                        break;
+                    if tx.try_send(report).is_err() {
+                        continue;
                     }
                 }
             }

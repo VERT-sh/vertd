@@ -1,8 +1,27 @@
 use log::warn;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use tokio::process::Command;
 use tokio::sync::OnceCell;
 use uuid::Uuid;
+
+pub const FFPROBE_TIMEOUT: Duration = Duration::from_secs(60);
+
+async fn run_ffprobe(args: &[&str]) -> anyhow::Result<std::process::Output> {
+    let child = Command::new("ffprobe")
+        .args(args)
+        .kill_on_drop(true)
+        .stdin(std::process::Stdio::null())
+        .output();
+
+    match tokio::time::timeout(FFPROBE_TIMEOUT, child).await {
+        Ok(result) => Ok(result?),
+        Err(_) => Err(anyhow::anyhow!(
+            "ffprobe timed out after {}s",
+            FFPROBE_TIMEOUT.as_secs()
+        )),
+    }
+}
 
 fn validate_ffprobe_output(
     output: &std::process::Output,
@@ -158,21 +177,19 @@ impl Job {
 
         let path = format!("input/{}.{}", self.id, self.from);
 
-        let output = Command::new("ffprobe")
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-count_packets",
-                "-show_entries",
-                "stream=nb_read_packets",
-                "-of",
-                "csv=p=0",
-                &path,
-            ])
-            .output()
-            .await?;
+        let output = run_ffprobe(&[
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-count_packets",
+            "-show_entries",
+            "stream=nb_read_packets",
+            "-of",
+            "csv=p=0",
+            &path,
+        ])
+        .await?;
 
         validate_ffprobe_output(&output, &path, "reading total frames")?;
 
@@ -250,20 +267,18 @@ impl Job {
         self.video
             .get_or_try_init(|| async {
                 let path = format!("input/{}.{}", self.id, self.from);
-                let output = Command::new("ffprobe")
-                    .args([
-                        "-v",
-                        "error",
-                        "-select_streams",
-                        "v:0",
-                        "-show_entries",
-                        "stream=codec_name,width,height,pix_fmt,r_frame_rate,bit_rate",
-                        "-of",
-                        "json",
-                        &path,
-                    ])
-                    .output()
-                    .await?;
+                let output = run_ffprobe(&[
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "stream=codec_name,width,height,pix_fmt,r_frame_rate,bit_rate",
+                    "-of",
+                    "json",
+                    &path,
+                ])
+                .await?;
 
                 validate_ffprobe_output(&output, &path, "reading video metadata")?;
                 let probe: Streams<VideoProbe> =
@@ -284,20 +299,18 @@ impl Job {
         self.audio
             .get_or_try_init(|| async {
                 let path = format!("input/{}.{}", self.id, self.from);
-                let output = Command::new("ffprobe")
-                    .args([
-                        "-v",
-                        "error",
-                        "-select_streams",
-                        "a",
-                        "-show_entries",
-                        "stream=index,codec_name",
-                        "-of",
-                        "json",
-                        &path,
-                    ])
-                    .output()
-                    .await?;
+                let output = run_ffprobe(&[
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "a",
+                    "-show_entries",
+                    "stream=index,codec_name",
+                    "-of",
+                    "json",
+                    &path,
+                ])
+                .await?;
                 validate_ffprobe_output(&output, &path, "reading all audio streams")?;
                 let probe: Streams<AudioStream> =
                     serde_json::from_slice(&output.stdout).map_err(|error| {
