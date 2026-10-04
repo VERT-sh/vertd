@@ -8,10 +8,14 @@ services:
       - WEBHOOK_PINGS=${WEBHOOK_PINGS}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - PUBLIC_URL=${PUBLIC_URL}
+      - ALLOW_CPU_FALLBACK=${ALLOW_CPU_FALLBACK}
+      - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES}
+      - VERTD_FORCE_GPU=${VERTD_FORCE_GPU}
+      - VERTD_VAAPI_DEVICE_PATH=${VERTD_VAAPI_DEVICE_PATH}
     ports:
       - "${PORT:-24153}:24153"
 
-    # For AMD/Intel GPUs, uncomment the "devices" section - then remove
+    # For AMD/Intel GPUs or CPU-only systems, uncomment the "devices" section - then remove
     # or comment out the "deploy" section and the "runtime" string used
     # for NVIDIA GPUs.
     #

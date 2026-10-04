@@ -6,21 +6,99 @@ use format::{Conversion, ConverterFormat};
 use job::{Job, ProgressUpdate};
 use log::error;
 use log::info;
+use serde::{Deserialize, Serialize};
 use speed::ConversionSpeed;
 use tokio::io::AsyncBufReadExt as _;
 use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
+pub mod codecs;
+pub mod constraint;
 pub mod format;
 pub mod gpu;
 pub mod job;
 pub mod speed;
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversionSettings {
+    pub vertd_speed: Option<u8>,
+    pub metadata: bool,
+    pub fps: Option<String>,
+    pub resolution: Option<String>,
+    pub video_codec: Option<String>,
+    pub video_bitrate: Option<String>,
+    pub audio_codec: Option<String>,
+    pub audio_bitrate: Option<String>,
+    pub audio_channels: Option<String>,
+    pub sample_rate: Option<String>,
+}
+
+impl ConversionSettings {
+    fn validate_number(value: &Option<String>, name: &str, maximum: u32) -> anyhow::Result<()> {
+        Self::validate_number_range(value, name, 1, maximum)
+    }
+
+    fn validate_number_range(
+        value: &Option<String>,
+        name: &str,
+        minimum: u32,
+        maximum: u32,
+    ) -> anyhow::Result<()> {
+        let Some(value) = value.as_deref() else {
+            return Ok(());
+        };
+        if value.is_empty() || value == "auto" {
+            return Ok(());
+        }
+        let number = value
+            .parse::<u32>()
+            .map_err(|_| anyhow!("{name} must be a positive integer"))?;
+        if number < minimum || number > maximum {
+            return Err(anyhow!("{name} must be between {minimum} and {maximum}"));
+        }
+        Ok(())
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        Self::validate_number(&self.fps, "fps", 240)?;
+        Self::validate_number(&self.video_bitrate, "videoBitrate (kbps)", 125_000)?;
+        Self::validate_number(&self.audio_bitrate, "audioBitrate (kbps)", 1_536)?;
+        Self::validate_number(&self.audio_channels, "audioChannels", 8)?;
+        Self::validate_number_range(&self.sample_rate, "sampleRate (Hz)", 8_000, 384_000)?;
+
+        if let Some(resolution) = self.resolution.as_deref() {
+            if !resolution.is_empty() && resolution != "auto" {
+                let (width, height) = resolution
+                    .split_once('x')
+                    .ok_or_else(|| anyhow!("resolution must use WIDTHxHEIGHT"))?;
+                let width = width
+                    .parse::<u32>()
+                    .map_err(|_| anyhow!("resolution width must be a positive integer"))?;
+                let height = height
+                    .parse::<u32>()
+                    .map_err(|_| anyhow!("resolution height must be a positive integer"))?;
+                if width == 0
+                    || height == 0
+                    || width > 8192
+                    || height > 8192
+                    || u64::from(width) * u64::from(height) > 33_554_432
+                {
+                    return Err(anyhow!(
+                        "resolution dimensions must be 1-8192 with at most 33,554,432 pixels"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 pub struct Converter {
     pub conversion: Conversion,
     speed: ConversionSpeed,
-    keep_metadata: bool,
+    settings: ConversionSettings,
 }
 
 impl Converter {
@@ -28,12 +106,12 @@ impl Converter {
         from: ConverterFormat,
         to: ConverterFormat,
         speed: ConversionSpeed,
-        keep_metadata: bool,
+        settings: ConversionSettings,
     ) -> Self {
         Self {
             conversion: Conversion::new(from, to),
             speed,
-            keep_metadata,
+            settings,
         }
     }
 
@@ -43,36 +121,65 @@ impl Converter {
         gpu: &gpu::ConverterGPU,
         vaapi_device_path: Option<&str>,
     ) -> anyhow::Result<(mpsc::Receiver<ProgressUpdate>, tokio::process::Child)> {
-        let (tx, rx) = mpsc::channel(1);
-        let input_filename = format!("input/{}.{}", job.id, self.conversion.from.to_string());
-        let output_filename = format!("output/{}.{}", job.id, self.conversion.to.to_string());
-        // let gpu = gpu::get_gpu().await;
-        // let bitrate = job.bitrate().await?;
-        // let fps = job.fps().await?;
-        // the above but we run in parallel
-        let (bitrate, fps) = job.bitrate_and_fps().await?;
+        self.settings.validate()?;
+        let (tx, rx) = mpsc::channel(256);
+        let input_filename = format!("input/{}.{}", job.id, self.conversion.from);
+        let output_filename = format!("output/{}.{}", job.id, self.conversion.to);
+
+        // use custom bitrate from speed if provided, else detect from file
+        let bitrate = if let Some(bitrate) = self.speed.custom_bitrate_bps() {
+            bitrate
+        } else {
+            job.bitrate().await?
+        };
+
+        let fps = job.fps().await?;
+        let (width, height) = job.resolution().await?;
+
+        let supported_accelerated_codecs = {
+            let app_state = crate::state::APP_STATE.lock().await;
+            app_state.supported_accelerated_codecs.clone()
+        };
         let args = self
             .conversion
-            .to_args(&self.speed, gpu, bitrate, fps, job)
+            .to_args(
+                &self.speed,
+                gpu,
+                (width, height),
+                bitrate,
+                fps,
+                &supported_accelerated_codecs,
+                job,
+                &self.settings,
+            )
             .await?;
         let args = args.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
         let args = args.as_slice();
         let gpu_args = gpu.hwaccel_args(vaapi_device_path);
         let gpu_args_refs: Vec<&str> = gpu_args.iter().map(|s| s.as_str()).collect();
 
-        let metadata_args: &[&str] = if self.keep_metadata {
-            &["-map_metadata", "0", "-map_chapters", "0"]
+        let metadata_args: &[&str] = if self.settings.metadata {
+            &["-map_metadata", "0", "-map_chapters", "0"][..]
         } else {
-            &["-map_metadata", "-1", "-map_chapters", "-1"]
+            &["-map_metadata", "-1", "-map_chapters", "-1"][..]
         };
 
         let command = &[
-            &["-hide_banner", "-loglevel", "error", "-progress", "pipe:1"][..],
+            &[
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-progress",
+                "pipe:1",
+            ][..],
             &gpu_args_refs[..],
-            &["-i", &input_filename],
+            self.conversion.from.input_format_args(),
+            &["-i", &input_filename][..],
             args,
             metadata_args,
-            &[&output_filename],
+            self.conversion.to.output_format_args(),
+            &[output_filename.as_str()][..],
         ]
         .concat();
         let command = command
@@ -80,9 +187,27 @@ impl Converter {
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
 
+        // if video is more than 4k on nvenc, remove -hwaccel cuda to avoid "Video width 7680 not within range from 48 to 4096"
+        // error from the h264_nvenc *decoder*, guh
+        let command = if matches!(gpu, gpu::ConverterGPU::NVIDIA) {
+            let (width, height) = job.resolution().await?;
+            if width > 3840 || height > 2160 {
+                command
+                    .iter()
+                    .filter(|s| *s != "-hwaccel" && *s != "cuda")
+                    .cloned()
+                    .collect()
+            } else {
+                command
+            }
+        } else {
+            command
+        };
+
         info!("running 'ffmpeg {}'", command.join(" "));
 
         let mut process = Command::new("ffmpeg")
+            .kill_on_drop(true)
             .args(command)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
@@ -103,8 +228,8 @@ impl Converter {
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 error!("{}", line);
-                if tx.send(ProgressUpdate::Error(line)).await.is_err() {
-                    break;
+                if tx.try_send(ProgressUpdate::Error(line)).is_err() {
+                    continue;
                 }
             }
         });
@@ -138,8 +263,8 @@ impl Converter {
                 }
 
                 for report in reports {
-                    if tx.send(report).await.is_err() {
-                        break;
+                    if tx.try_send(report).is_err() {
+                        continue;
                     }
                 }
             }

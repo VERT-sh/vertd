@@ -1,12 +1,10 @@
 // get /download/{id} where id is Uuid
 
-use actix_web::{get, web, HttpResponse, Responder, ResponseError};
-use futures_util::stream::StreamExt;
-use tokio::{fs, time, time::Duration};
-use tokio_util::io::ReaderStream;
-use std::sync::{Arc, atomic};
-
 use crate::{http::response::ApiResponse, state::APP_STATE};
+use actix_web::{get, web, HttpResponse, Responder, ResponseError};
+use futures_util::StreamExt;
+use tokio::fs;
+use tokio_util::io::ReaderStream;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DownloadError {
@@ -16,6 +14,8 @@ pub enum DownloadError {
     IncompleteHandshake,
     #[error("invalid token")]
     InvalidToken,
+    #[error("job is not completed")]
+    JobNotCompleted,
     #[error("filesystem error: {0}")]
     FilesystemError(#[from] std::io::Error),
 }
@@ -26,6 +26,7 @@ impl ResponseError for DownloadError {
             DownloadError::JobNotFound => actix_web::http::StatusCode::NOT_FOUND,
             DownloadError::IncompleteHandshake => actix_web::http::StatusCode::BAD_REQUEST,
             DownloadError::InvalidToken => actix_web::http::StatusCode::UNAUTHORIZED,
+            DownloadError::JobNotCompleted => actix_web::http::StatusCode::CONFLICT,
             DownloadError::FilesystemError(_) => actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
         };
 
@@ -33,28 +34,38 @@ impl ResponseError for DownloadError {
     }
 }
 
-struct StreamGuard {
-    file_path: String,
-    bytes_sent: Arc<atomic::AtomicU64>,
-    file_size: u64,
+struct AdminDownloadGuard {
+    path: String,
+    size: u64,
+    sent: u64,
+    failed: bool,
 }
 
-impl Drop for StreamGuard {
-    fn drop(&mut self) {
-        let total_sent = self.bytes_sent.load(atomic::Ordering::Relaxed);
-        let file_path = self.file_path.clone();
-        let file_size = self.file_size;
+impl AdminDownloadGuard {
+    fn should_delete(&self) -> bool {
+        !self.failed && self.sent == self.size
+    }
+}
 
-        tokio::spawn(async move {
-            if total_sent == file_size {
-                log::info!("all bytes successfully sent for {}", file_path);
-                time::sleep(Duration::from_secs(30)).await;
-                log::info!("removing file after successful download: {}", file_path);
-                if let Err(e) = fs::remove_file(&file_path).await {
-                    log::error!("failed to remove file: {}", e);
+impl Drop for AdminDownloadGuard {
+    fn drop(&mut self) {
+        if self.should_delete() {
+            let path = self.path.clone();
+            log::info!(
+                "permanent file {} scheduled for deletion in 10 seconds",
+                path
+            );
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                if let Err(e) = fs::remove_file(&path).await {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        log::error!("failed to remove downloaded permanent file {}: {}", path, e);
+                    }
+                } else {
+                    log::info!("removed downloaded permanent file {}", path);
                 }
-            }
-        });
+            });
+        }
     }
 }
 
@@ -67,14 +78,29 @@ pub async fn download(path: web::Path<(String, String)>) -> Result<impl Responde
         .is_some_and(|p| p == token && !p.is_empty() && p != "supersecret"); // disable admin if password is empty or default
 
     let file_path = if is_admin {
-        // prevent path traversal by checking if valid UUID
-        let id_no_ext = id.split('.').next().unwrap_or(&id);
-        if uuid::Uuid::parse_str(id_no_ext).is_err() {
+        let (raw_uuid, raw_ext) = id.split_once('.').ok_or_else(|| {
             log::warn!("invalid UUID for download: {id}");
+            DownloadError::JobNotFound
+        })?;
+
+        if raw_uuid.contains('/')
+            || raw_uuid.contains('\\')
+            || raw_ext.contains('/')
+            || raw_ext.contains('\\')
+            || raw_ext.is_empty()
+            || !raw_ext.chars().all(|c| c.is_ascii_alphanumeric())
+        {
+            log::warn!("invalid admin filename for download: {id}");
             return Err(DownloadError::JobNotFound);
         }
-        log::warn!("admin download used for id {id}");
-        format!("permanent/{id}")
+
+        let parsed_uuid = uuid::Uuid::parse_str(raw_uuid).map_err(|_| {
+            log::warn!("invalid UUID for download: {id}");
+            DownloadError::JobNotFound
+        })?;
+
+        let sanitized_name = format!("{}.{}", parsed_uuid, raw_ext);
+        format!("permanent/{sanitized_name}")
     } else {
         let id = id.parse().map_err(|_| DownloadError::JobNotFound)?;
         let app_state = APP_STATE.lock().await;
@@ -89,15 +115,14 @@ pub async fn download(path: web::Path<(String, String)>) -> Result<impl Responde
             return Err(DownloadError::InvalidToken);
         }
 
-        let file_path = match job.to {
+        if !job.completed() {
+            return Err(DownloadError::JobNotCompleted);
+        }
+
+        match job.to {
             Some(to) => format!("output/{id}.{to}"),
             None => return Err(DownloadError::IncompleteHandshake),
-        };
-
-        let mut app_state = APP_STATE.lock().await;
-        app_state.jobs.remove(&id);
-        drop(app_state);
-        file_path
+        }
     };
 
     let file = fs::File::open(&file_path).await.map_err(|e| {
@@ -108,37 +133,36 @@ pub async fn download(path: web::Path<(String, String)>) -> Result<impl Responde
         }
     })?;
 
+    if is_admin {
+        log::warn!("admin download used for id {id}");
+    }
+
     let metadata = file
         .metadata()
         .await
         .map_err(DownloadError::FilesystemError)?;
     let file_size = metadata.len();
-    let bytes_sent = Arc::new(atomic::AtomicU64::new(0));
-    let bytes_sent_clone = bytes_sent.clone();
 
-    let file_stream = ReaderStream::new(file);
-    let tracked_stream = file_stream.map(move |chunk| {
-        if let Ok(ref bytes) = chunk {
-            bytes_sent_clone.fetch_add(bytes.len() as u64, atomic::Ordering::Relaxed);
+    // guard ONLY for admin downloads, deleting after all bytes sent sucessfully
+    // regular (user) downloads deleted after confirmed by vert web ui (/confirm/{id})
+    let mut guard = is_admin.then(|| AdminDownloadGuard {
+        path: file_path,
+        size: file_size,
+        sent: 0,
+        failed: false,
+    });
+    let stream = ReaderStream::new(file).map(move |chunk| {
+        if let Some(guard) = guard.as_mut() {
+            match &chunk {
+                Ok(bytes) => guard.sent += bytes.len() as u64,
+                Err(_) => guard.failed = true,
+            }
         }
         chunk
     });
 
-    // remove file when stream is dropped
-    let guard = StreamGuard {
-        file_path: file_path.clone(),
-        bytes_sent: bytes_sent.clone(),
-        file_size,
-    };
-
-    // keep guard alive while streaming
-    let http_stream = tracked_stream.inspect(move |_| {
-        let _ = &guard;
-    });
-
     Ok(HttpResponse::Ok()
         .insert_header(("Content-Type", "application/octet-stream"))
-        .insert_header(("Content-Disposition", format!("attachment; filename=\"{}\"", id)))
         .insert_header(("Content-Length", file_size))
-        .streaming(http_stream))
+        .streaming(stream))
 }

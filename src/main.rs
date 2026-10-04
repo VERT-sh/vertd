@@ -9,10 +9,12 @@ use dotenv::dotenv;
 use env_logger::Env;
 use http::start_http;
 use log::{error, info, warn};
-use tokio::fs;
+use once_cell::sync::Lazy;
+use tokio::{fs, process::Command};
 
 pub const INPUT_LIFETIME: Duration = Duration::from_secs(60 * 60);
 pub const OUTPUT_LIFETIME: Duration = Duration::from_secs(60 * 60);
+pub const GPU_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 
 enum FFUtil {
     FFmpeg,
@@ -124,6 +126,32 @@ fn get_vaapi_device_path() -> Option<String> {
     None
 }
 
+pub static MAX_UPLOAD_BYTES: Lazy<Option<usize>> = Lazy::new(|| {
+    match std::env::var("MAX_UPLOAD_BYTES") {
+        Ok(value) => {
+            let trimmed = value.trim();
+            // unlimited if empty
+            if trimmed.is_empty() {
+                None
+            } else {
+                match trimmed.parse::<usize>() {
+                    Ok(0) => None, // unlimited if set to 0
+                    Ok(limit) => Some(limit),
+                    Err(e) => {
+                        warn!(
+                        "invalid MAX_UPLOAD_BYTES value '{}': {}. falling back to no upload size limit",
+                        trimmed,
+                        e
+                    );
+                        None
+                    }
+                }
+            }
+        }
+        Err(_) => None,
+    }
+});
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenv().ok();
@@ -179,8 +207,7 @@ async fn main() -> anyhow::Result<()> {
             #[cfg(target_os = "linux")]
             if matches!(gpu, ConverterGPU::AMD | ConverterGPU::Intel) {
                 let device_path = vaapi_device_path
-                    .as_ref()
-                    .map(|s| s.as_str())
+                    .as_deref()
                     .unwrap_or("/dev/dri/renderD128");
                 info!("using VA-API device path: {}", device_path);
             }
@@ -193,11 +220,18 @@ async fn main() -> anyhow::Result<()> {
 
     // default to CPU if detection failed
     let gpu = gpu.unwrap_or(ConverterGPU::CPU);
+
+    // check which accelerated codecs are actually supported by this GPU
+    let accelerated_codecs = check_accelerated_codecs(gpu, vaapi_device_path.as_deref()).await;
+
     {
         let mut app_state = state::APP_STATE.lock().await;
         app_state.gpu = Some(gpu);
         app_state.vaapi_device_path = vaapi_device_path;
+        app_state.supported_accelerated_codecs = accelerated_codecs;
     }
+
+    let server = start_http().await?;
 
     // remove input/ and output/ recursively if they exist -- we don't care if this fails tho
     let _ = fs::remove_dir_all("input").await;
@@ -214,6 +248,100 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => return Err(e.into()),
     }
 
-    start_http().await?;
+    if let Some(limit) = *MAX_UPLOAD_BYTES {
+        info!(
+            "max upload size set to {} bytes ({} MB)",
+            limit,
+            limit / 1024 / 1024
+        );
+    } else {
+        info!("no max upload size set - unlimited size allowed");
+    }
+
+    server.await?;
     Ok(())
+}
+
+// checks if the gpu supports accelerated encoding
+// builds supported_accelerated_codecs in AppState to avoid unnecessary errors/conversions (see format.rs#accelerated_or_default_codec)
+async fn check_accelerated_codecs(
+    gpu: ConverterGPU,
+    vaapi_device_path: Option<&str>,
+) -> Vec<String> {
+    let test_codecs = ConverterGPU::PROBE_CODECS;
+    let mut supported = Vec::new();
+    let mut unsupported = Vec::new();
+
+    if matches!(gpu, ConverterGPU::CPU) {
+        info!("using CPU rendering, skipping accelerated codec checks");
+        return supported;
+    }
+
+    info!("running accelerated codec checks");
+    for codec in test_codecs {
+        let encoder = match gpu.get_accelerated_codec(codec).await {
+            Ok(enc) => enc,
+            Err(e) => {
+                warn!("no accelerated encoder for codec {}: {}", codec, e);
+                unsupported.push(codec.to_string());
+                continue;
+            }
+        };
+
+        let process = Command::new("ffmpeg")
+            .args(gpu.probe_args(&encoder, vaapi_device_path))
+            .kill_on_drop(true)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn();
+
+        match process {
+            Ok(child) => {
+                // don't let slow / non-responsive drivers stall startup
+                match tokio::time::timeout(GPU_PROBE_TIMEOUT, child.wait_with_output()).await {
+                    Ok(Ok(output)) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        if !stderr.contains("Error while opening encoder")
+                            && output.status.success()
+                        {
+                            supported.push(codec.to_string());
+                        } else {
+                            warn!(
+                                "accelerated probe failed for {} ({}): {}",
+                                codec,
+                                encoder,
+                                stderr.trim()
+                            );
+                            unsupported.push(codec.to_string());
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        warn!(
+                            "failed to wait on ffmpeg process for codec {}: {}",
+                            codec, e
+                        );
+                        unsupported.push(codec.to_string());
+                    }
+                    Err(_) => {
+                        warn!(
+                            "accelerated probe for {} ({}) timed out after {}s",
+                            codec,
+                            encoder,
+                            GPU_PROBE_TIMEOUT.as_secs()
+                        );
+                        unsupported.push(codec.to_string());
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("failed to execute ffmpeg for codec {}: {}", codec, e);
+                unsupported.push(codec.to_string());
+            }
+        }
+    }
+
+    info!("supported accelerated codecs: {:?}", supported);
+    info!("unsupported accelerated codecs: {:?}", unsupported);
+    supported
 }

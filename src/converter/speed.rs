@@ -1,9 +1,8 @@
-use log::warn;
 use serde::{Deserialize, Serialize};
 
-use super::{format::ConverterFormat, gpu::ConverterGPU};
+use super::format::ConverterFormat;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum ConversionSpeed {
     UltraFast,
@@ -12,143 +11,68 @@ pub enum ConversionSpeed {
     Slow,
     Slower,
     VerySlow,
+    Bitrate(u32),
 }
 
 impl ConversionSpeed {
-    pub fn to_bitrate_mul(&self) -> f64 {
+    pub fn custom_bitrate_bps(&self) -> Option<u64> {
         match self {
-            ConversionSpeed::UltraFast => 0.88,
-            ConversionSpeed::Fast => 0.94,
-            ConversionSpeed::Medium => 1.0,
-            ConversionSpeed::Slow => 1.06,
-            ConversionSpeed::Slower => 1.12,
-            ConversionSpeed::VerySlow => 1.18,
+            Self::Bitrate(kbps) => Some(u64::from(*kbps) * 1_000),
+            _ => None,
         }
     }
 
-    pub fn to_args(&self, to: &ConverterFormat, gpu: &ConverterGPU, bitrate: u64) -> Vec<String> {
-        let mut args = Vec::new();
-
-        match to {
-            ConverterFormat::MP4
-            | ConverterFormat::MKV
-            | ConverterFormat::MOV
-            | ConverterFormat::MTS
-            | ConverterFormat::TS
-            | ConverterFormat::M2TS
-            | ConverterFormat::FLV
-            | ConverterFormat::F4V
-            | ConverterFormat::M4V
-            | ConverterFormat::ThreeGP
-            | ConverterFormat::ThreeG2
-            | ConverterFormat::H264
-            | ConverterFormat::DIVX => {
-                args.push("-preset".to_string());
-                match gpu {
-                    ConverterGPU::NVIDIA => match self {
-                        // only "slow", "medium", and "fast" are supported
-                        ConversionSpeed::VerySlow | ConversionSpeed::Slower => {
-                            args.push("slow".to_string())
-                        }
-                        ConversionSpeed::Slow | ConversionSpeed::Medium => {
-                            args.push("medium".to_string())
-                        }
-                        ConversionSpeed::Fast | ConversionSpeed::UltraFast => {
-                            args.push("fast".to_string())
-                        }
-                    },
-
-                    ConverterGPU::AMD => {
-                        #[cfg(target_os = "windows")]
-                        // amf encoder
-                        match self {
-                            ConversionSpeed::UltraFast | ConversionSpeed::Fast => {
-                                args.push("speed".to_string())
-                            }
-                            ConversionSpeed::Medium | ConversionSpeed::Slow => {
-                                args.push("balanced".to_string())
-                            }
-                            ConversionSpeed::Slower | ConversionSpeed::VerySlow => {
-                                args.push("quality".to_string())
-                            }
-                        }
-                        #[cfg(not(target_os = "windows"))]
-                        // vaapi encoder
-                        match self {
-                            ConversionSpeed::UltraFast => args.push("ultrafast".to_string()),
-                            ConversionSpeed::Fast => args.push("fast".to_string()),
-                            ConversionSpeed::Medium => args.push("medium".to_string()),
-                            ConversionSpeed::Slow => args.push("slow".to_string()),
-                            ConversionSpeed::Slower => args.push("slower".to_string()),
-                            ConversionSpeed::VerySlow => args.push("veryslow".to_string()),
-                        }
-                    }
-
-                    _ => match self {
-                        ConversionSpeed::UltraFast => args.push("ultrafast".to_string()),
-                        ConversionSpeed::Fast => args.push("fast".to_string()),
-                        ConversionSpeed::Medium => args.push("medium".to_string()),
-                        ConversionSpeed::Slow => args.push("slow".to_string()),
-                        ConversionSpeed::Slower => args.push("slower".to_string()),
-                        ConversionSpeed::VerySlow => args.push("veryslow".to_string()),
-                    },
-                }
-            }
-
-            ConverterFormat::GIF => {}
-
-            ConverterFormat::WebM | ConverterFormat::AVI | ConverterFormat::NUT => {
-                args.push("-speed".to_string());
-                match self {
-                    ConversionSpeed::UltraFast => args.push("4".to_string()),
-                    ConversionSpeed::Fast => args.push("3".to_string()),
-                    ConversionSpeed::Medium => args.push("2".to_string()),
-                    ConversionSpeed::Slow => args.push("1".to_string()),
-                    ConversionSpeed::Slower => args.push("0".to_string()),
-                    ConversionSpeed::VerySlow => args.push("-1".to_string()),
-                };
-            }
-
-            ConverterFormat::OGV => {
-                args.push("-speed".to_string());
-                match self {
-                    ConversionSpeed::UltraFast | ConversionSpeed::Fast => {
-                        args.push("2".to_string())
-                    }
-                    ConversionSpeed::Medium | ConversionSpeed::Slow => args.push("1".to_string()),
-                    ConversionSpeed::Slower | ConversionSpeed::VerySlow => {
-                        args.push("0".to_string())
-                    }
-                }
-            }
-
-            ConverterFormat::MPEG
-            | ConverterFormat::MPG
-            | ConverterFormat::WMV
-            | ConverterFormat::VOB
-            | ConverterFormat::MXF
-            | ConverterFormat::RM
-            | ConverterFormat::RMVB
-            | ConverterFormat::SWF
-            | ConverterFormat::AMV
-            | ConverterFormat::ASF => {
-                warn!("{:?} format does not support speed settings", to);
-            }
-        };
-
-        if *to != ConverterFormat::GIF {
-            args.push("-b:v".to_string());
-
-            let mut bitrate = (bitrate as f64 * self.to_bitrate_mul()) as u64;
-
-            let max_bitrate: u64 = 125_000_000; // 125 Mbps
-            if bitrate > max_bitrate {
-                bitrate = max_bitrate; 
-            }
-
-            args.push(bitrate.to_string());
+    pub fn to_args(&self, encoder: &str, to: &ConverterFormat, bitrate: u64) -> Vec<String> {
+        if encoder == "copy" {
+            return Vec::new();
         }
 
+        let level = match self {
+            Self::UltraFast => 0,
+            Self::Fast => 1,
+            Self::Medium => 2,
+            Self::Slow => 3,
+            Self::Slower => 4,
+            Self::VerySlow => 5,
+            Self::Bitrate(_) => 2,
+        };
+
+        let mut args = Vec::new();
+
+        if !matches!(self, Self::Bitrate(_)) {
+            let knob = match encoder {
+                "libx264" | "libx265" => Some((
+                    "-preset",
+                    ["ultrafast", "fast", "medium", "slow", "slower", "veryslow"][level],
+                )),
+                "libsvtav1" => Some(("-preset", ["12", "10", "8", "6", "4", "2"][level])),
+                "libvpx" | "libvpx-vp9" => {
+                    Some(("-cpu-used", ["8", "6", "4", "2", "1", "0"][level]))
+                }
+                "libaom-av1" => Some(("-cpu-used", ["8", "6", "4", "2", "1", "0"][level])),
+                "h264_nvenc" | "hevc_nvenc" | "av1_nvenc" => {
+                    Some(("-preset", ["p1", "p2", "p4", "p5", "p6", "p7"][level]))
+                }
+                "h264_amf" | "hevc_amf" | "av1_amf" => Some((
+                    "-quality",
+                    [
+                        "speed", "speed", "balanced", "balanced", "quality", "quality",
+                    ][level],
+                )),
+                _ => None,
+            };
+            if let Some((flag, value)) = knob {
+                args.extend([flag.to_string(), value.to_string()]);
+            }
+        }
+
+        if *to == ConverterFormat::WEBP && matches!(encoder, "libwebp" | "libwebp_anim") {
+            let lossless = matches!(self, Self::Slow | Self::Slower | Self::VerySlow);
+            args.extend(["-lossless".to_string(), u8::from(lossless).to_string()]);
+        }
+        if *to != ConverterFormat::GIF {
+            args.extend(["-b:v".to_string(), bitrate.to_string()]);
+        }
         args
     }
 }

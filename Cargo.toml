@@ -3,9 +3,8 @@ name = "vertd"
 version = "0.1.0"
 edition = "2021"
 
-[profile.release]
-strip = true
-lto = "thin"
+[lints.clippy]
+upper_case_acronyms = "allow"
 
 [dependencies]
 actix-cors = "0.7.0"
@@ -20,6 +19,7 @@ futures-util = "0.3.31"
 hex = "0.4.3"
 lazy_static = "1.5.0"
 log = "0.4.25"
+once_cell = "1.21.3"
 rand = "0.9.0"
 rbtag = "0.3.0"
 serde = { version = "1.0.217", features = ["derive"] }

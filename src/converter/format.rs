@@ -1,13 +1,20 @@
-use super::{gpu::ConverterGPU, speed::ConversionSpeed};
-use log::warn;
-use strum_macros::{Display, EnumString};
+use crate::converter::job::Job;
 
-#[derive(Clone, Copy, Debug, PartialEq, EnumString, Display)]
+use super::{
+    codecs, constraint::FormatConstraint, gpu::ConverterGPU, speed::ConversionSpeed,
+    ConversionSettings,
+};
+use log::{info, warn};
+use strum_macros::{Display, EnumIter, EnumString};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumString, Display, EnumIter)]
 #[strum(serialize_all = "lowercase")]
 pub enum ConverterFormat {
     MP4,
     WebM,
     GIF,
+    APNG,
+    WEBP,
     AVI,
     MKV,
     WMV,
@@ -26,7 +33,9 @@ pub enum ConverterFormat {
     #[strum(serialize = "3g2")]
     ThreeG2,
     MXF,
+    GXF,
     OGV,
+    OGX,
     RM,
     RMVB,
     H264,
@@ -38,13 +47,21 @@ pub enum ConverterFormat {
 }
 
 impl ConverterFormat {
-    pub fn conversion_into_args(
-        &self,
-        speed: &ConversionSpeed,
-        gpu: &ConverterGPU,
-        bitrate: u64,
-    ) -> Vec<String> {
-        speed.to_args(self, gpu, bitrate)
+    pub fn input_format_args(&self) -> &'static [&'static str] {
+        match self {
+            Self::MTS | Self::TS | Self::FLV | Self::NUT => &["-fflags", "+genpts"],
+            _ => &[],
+        }
+    }
+
+    pub fn output_format_args(&self) -> &'static [&'static str] {
+        match self {
+            // need to tell ffmpeg .ogx is a ogg format or it'll fail
+            Self::OGX => &["-f", "ogg"],
+            Self::DIVX => &["-f", "avi"],
+            Self::MXF => &["-timecode", "00:00:00:00", "-g", "128"],
+            _ => &[],
+        }
     }
 }
 
@@ -63,211 +80,588 @@ impl Conversion {
         gpu: &ConverterGPU,
         codecs: &[&str],
         default: &str,
+        supported_accelerated_codecs: &[String],
     ) -> String {
         for codec in codecs {
-            if let Ok(encoder) = gpu.get_accelerated_codec(codec).await {
-                return encoder;
+            // try all codecs in order and use first supported, else fallback to default
+            if supported_accelerated_codecs.iter().any(|c| c == *codec) {
+                return gpu
+                    .get_accelerated_codec(codec)
+                    .await
+                    .unwrap_or_else(|_| default.to_string());
             }
         }
+
+        warn!(
+            "no supported accelerated codec found for {:?}, falling back to default {}",
+            self.to, default
+        );
         default.to_string()
+    }
+
+    fn default_encoder_for_codec(codec: &str) -> String {
+        match codec {
+            "h264" => "libx264".to_string(),
+            "hevc" => "libx265".to_string(),
+            "av1" => "libsvtav1".to_string(),
+            "vp8" => "libvpx".to_string(),
+            "vp9" => "libvpx-vp9".to_string(),
+            "prores" => "prores_ks".to_string(),
+            "webp" => "libwebp".to_string(),
+            "flv1" => "flv".to_string(),
+            "mp3" => "libmp3lame".to_string(),
+            other => other.to_string(),
+        }
+    }
+
+    fn is_auto(setting: &Option<String>) -> bool {
+        match setting.as_deref() {
+            None | Some("") | Some("auto") => true,
+            Some(_) => false,
+        }
+    }
+
+    fn custom_value<T: ToString>(setting: &Option<T>) -> Option<String> {
+        setting.as_ref().and_then(|value| {
+            let value = value.to_string();
+            (!value.is_empty() && value != "auto").then_some(value)
+        })
+    }
+
+    fn has_explicit_setting(settings: &[&Option<String>]) -> bool {
+        settings.iter().any(|setting| !Self::is_auto(setting))
+    }
+
+    fn insert_codec_arg(args: &mut Vec<String>, flag: &str, codec: String) {
+        if let Some(index) = args.iter().position(|arg| arg == flag) {
+            if let Some(value) = args.get_mut(index + 1) {
+                *value = codec;
+                return;
+            }
+            args.push(codec);
+            return;
+        }
+
+        args.extend([flag.to_string(), codec]);
+    }
+
+    fn append_video_filter(args: &mut Vec<String>, filter: &str) {
+        if let Some(index) = args.iter().position(|arg| arg == "-vf") {
+            if let Some(value) = args.get_mut(index + 1) {
+                value.push(',');
+                value.push_str(filter);
+                return;
+            }
+        }
+
+        args.extend(["-vf".to_string(), filter.to_string()]);
+    }
+
+    fn append_constraint_args(args: &mut Vec<String>, constraints: &[String]) {
+        let mut constraints = constraints.iter();
+        while let Some(arg) = constraints.next() {
+            if arg == "-vf" {
+                if let Some(filter) = constraints.next() {
+                    Self::append_video_filter(args, filter);
+                }
+            } else {
+                args.push(arg.clone());
+            }
+        }
+    }
+
+    async fn preferred_video_encoder(
+        &self,
+        gpu: &ConverterGPU,
+        supported_accelerated_codecs: &[String],
+    ) -> Option<String> {
+        let (video_codecs, _) = codecs::codec_support_for(self.to)?;
+        let preferred_video_codec = *video_codecs.first()?;
+        let default_encoder = Self::default_encoder_for_codec(preferred_video_codec);
+
+        Some(
+            self.accelerated_or_default_codec(
+                gpu,
+                video_codecs,
+                &default_encoder,
+                supported_accelerated_codecs,
+            )
+            .await,
+        )
+    }
+
+    fn preferred_audio_encoder(&self) -> Option<String> {
+        let (_, audio_codecs) = codecs::codec_support_for(self.to)?;
+        let preferred_audio_codec = *audio_codecs.first()?;
+        Some(Self::default_encoder_for_codec(preferred_audio_codec))
+    }
+
+    // workarounds for NVENC for "weirder" videos
+    // i only got a NVIDIA GPU so i don't know what other "workarounds" other encoders might need
+    // -maya
+    async fn nvenc_args(
+        &self,
+        gpu: &ConverterGPU,
+        resolution: (u32, u32),
+        fps: u32,
+        supported_accelerated_codecs: &[String],
+        job: &Job,
+    ) -> anyhow::Result<Vec<String>> {
+        let (width, height) = resolution;
+        let is_4k = width == 3840 || height == 2160;
+        let is_above_4k = width > 3840 || height > 2160;
+        let pix_fmt = job.pix_fmt().await?;
+
+        // choose codec
+        // prefer original codec, force h265 if original is h264 and (10bit or 4k)
+        let codecs = job.codecs().await?;
+        let has_h265 = codecs.0.to_lowercase().contains("hevc");
+        let has_h264 = codecs.0.to_lowercase().contains("h264");
+        let is_10bit = pix_fmt.contains("10le") || pix_fmt.contains("10be");
+        let target_supports_hevc = codecs::support_video_codec(self.to, "hevc");
+        let use_hevc =
+            target_supports_hevc && (has_h265 || (has_h264 && (is_10bit || is_4k || is_above_4k)));
+        let (codec_order, default) = if use_hevc {
+            (&["hevc"][..], "libx265")
+        } else {
+            (&["h264"][..], "libx264")
+        };
+
+        // do we still really need to check for codec support? this function is only called if gpu is nvidia
+        let encoder = self
+            .accelerated_or_default_codec(gpu, codec_order, default, supported_accelerated_codecs)
+            .await;
+
+        let mut args = vec!["-c:v".to_string(), encoder.clone()];
+
+        // convert to 8 bit if 10 bit on h264_nvenc
+        if is_10bit && encoder == "h264_nvenc" {
+            args.extend(["-pix_fmt".to_string(), "yuv420p".to_string()]);
+        }
+
+        if fps > 240 {
+            args.extend(["-r".to_string(), "240".to_string()]);
+        }
+
+        // scale to 160:-2 if width is less than 160
+        if width < 160 {
+            args.extend(["-vf".to_string(), "scale=160:-2".to_string()]);
+        }
+
+        args.extend(["-strict".to_string(), "experimental".to_string()]);
+
+        Ok(args)
     }
 
     pub async fn to_args(
         &self,
         speed: &ConversionSpeed,
         gpu: &ConverterGPU,
+        resolution: (u32, u32),
         bitrate: u64,
         fps: u32,
+        supported_accelerated_codecs: &[String],
         job: &super::job::Job,
+        settings: &ConversionSettings,
     ) -> anyhow::Result<Vec<String>> {
-        let conversion_opts: Vec<String> = match self.to {
-            ConverterFormat::MP4
-            | ConverterFormat::MKV
-            | ConverterFormat::MOV
-            | ConverterFormat::MTS
-            | ConverterFormat::TS
-            | ConverterFormat::M2TS
-            | ConverterFormat::FLV
-            | ConverterFormat::F4V
-            | ConverterFormat::M4V
-            | ConverterFormat::ThreeGP
-            | ConverterFormat::ThreeG2
-            | ConverterFormat::H264 => {
-                let encoder = self
-                    .accelerated_or_default_codec(gpu, &["h264"], "libx264")
-                    .await;
+        settings.validate()?;
+        let audio_codec = Self::custom_value(&settings.audio_codec)
+            .or_else(|| self.preferred_audio_encoder())
+            .unwrap_or_default();
+        let cap = FormatConstraint::for_audio_codec(self.to, &audio_codec);
+        let final_fps = Self::custom_value(&settings.fps)
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(fps);
+        if self.to == ConverterFormat::AMV {
+            if let Some(sample_rate) = Self::custom_value(&settings.sample_rate) {
+                anyhow::ensure!(
+                    sample_rate.parse::<u32>().ok() == Some(22_050),
+                    "AMV requires a sample rate of 22050 Hz"
+                );
+            }
+        }
 
-                let mut args = vec!["-c:v".to_string(), encoder.clone()];
+        let auto_video_bitrate = Self::is_auto(&settings.video_bitrate);
+        let auto_fps = Self::is_auto(&settings.fps);
+        let auto_resolution = Self::is_auto(&settings.resolution);
+        let auto_audio_bitrate = Self::is_auto(&settings.audio_bitrate);
+        let auto_video_codec = Self::is_auto(&settings.video_codec);
+        let auto_sample_rate = Self::is_auto(&settings.sample_rate);
+        let gif_width = Self::custom_value(&settings.resolution)
+            .and_then(|custom_resolution| {
+                custom_resolution
+                    .split_once('x')
+                    .and_then(|(width, _)| width.parse::<u32>().ok())
+            })
+            .unwrap_or(resolution.0);
+        let gif_fps = Self::custom_value(&settings.fps)
+            .and_then(|custom_fps| custom_fps.parse::<u32>().ok())
+            .unwrap_or(fps)
+            .min(24);
 
-                let (width, height) = job.resolution().await?;
-                let is_4k = width >= 3840 || height >= 2160;
-                let pix_fmt = job.pix_fmt().await?;
+        let applied_cap = cap.as_ref().map(|cap| {
+            cap.apply(
+                bitrate,
+                final_fps,
+                resolution,
+                auto_video_bitrate,
+                auto_fps,
+                auto_resolution,
+                auto_audio_bitrate,
+                auto_sample_rate,
+            )
+        });
 
-                // convert to 8bit if 10bit (h264_nvenc does not support 10bit)
-                // could probably use h265 instead?
-                let is_10bit = pix_fmt.contains("10le") || pix_fmt.contains("10be");
-                if is_10bit {
-                    args.extend(["-pix_fmt".to_string(), "yuv420p".to_string()]);
-                }
+        info!(
+            "applied cap for job {} (to {}): {:?}",
+            job.id, self.to, applied_cap
+        );
 
-                if is_4k {
-                    args.extend(["-level:v".to_string(), "5.2".to_string()]);
-                    if fps > 120 {
-                        args.extend(["-r".to_string(), "120".to_string()]);
+        let effective_bitrate = applied_cap
+            .as_ref()
+            .map_or(bitrate, |applied| applied.bitrate);
+        let cap_args = applied_cap
+            .as_ref()
+            .map_or_else(Vec::new, |applied| applied.args.clone());
+
+        let requires_video_encoding = Self::has_explicit_setting(&[
+            &settings.fps,
+            &settings.resolution,
+            &settings.video_codec,
+            &settings.video_bitrate,
+        ]) || applied_cap
+            .as_ref()
+            .is_some_and(|applied| applied.requires_video_encoding);
+
+        let requires_audio_encoding = Self::has_explicit_setting(&[
+            &settings.audio_bitrate,
+            &settings.audio_codec,
+            &settings.sample_rate,
+            &settings.audio_channels,
+        ]) || applied_cap
+            .as_ref()
+            .is_some_and(|applied| applied.requires_audio_encoding);
+
+        let input_codecs = job.codecs().await?;
+        let audio_streams = job.audio_streams().await?;
+        let input_pix_fmt = job.pix_fmt().await?;
+        let input_video_codec = input_codecs.0.to_lowercase();
+        let has_usable_audio = !audio_streams.is_empty();
+        let has_alpha = input_pix_fmt.starts_with("yuva")
+            || input_pix_fmt.starts_with("gbrap")
+            || input_pix_fmt.starts_with("ya")
+            || input_pix_fmt.starts_with("rgba")
+            || input_pix_fmt.starts_with("bgra")
+            || matches!(input_pix_fmt.as_str(), "argb" | "abgr" | "ayuv" | "vuya");
+        let flatten_alpha = has_alpha
+            && !matches!(
+                self.to,
+                ConverterFormat::GIF | ConverterFormat::WEBP | ConverterFormat::APNG
+            );
+
+        let supports_remux = codecs::codec_support_for(self.from).is_some()
+            && codecs::codec_support_for(self.to).is_some();
+
+        let can_remux_video = supports_remux
+            && !requires_video_encoding
+            && !flatten_alpha
+            && codecs::support_video_codec(self.from, &input_video_codec)
+            && codecs::support_video_codec(self.to, &input_video_codec);
+
+        let mut remux_streams = Vec::new();
+        if can_remux_video {
+            remux_streams.push("video".to_string());
+        }
+
+        let remux = !remux_streams.is_empty();
+
+        let mut nvenc_path = false;
+
+        let conversion_opts: Vec<String> = if remux {
+            // remux if possible
+            log::info!(
+                "remuxing {} to {} for job {}, remuxing streams: {:?}",
+                self.from,
+                self.to,
+                job.id,
+                remux_streams
+            );
+            self.remux_args(gpu, supported_accelerated_codecs, job, &remux_streams)
+                .await
+        } else {
+            // extra/override args for specific formats
+            match self.to {
+                ConverterFormat::MP4
+                | ConverterFormat::MKV
+                | ConverterFormat::MOV
+                | ConverterFormat::MTS
+                | ConverterFormat::TS
+                | ConverterFormat::M2TS
+                | ConverterFormat::FLV
+                | ConverterFormat::F4V
+                | ConverterFormat::M4V
+                | ConverterFormat::ThreeGP
+                | ConverterFormat::ThreeG2
+                | ConverterFormat::H264 => {
+                    if matches!(gpu, ConverterGPU::NVIDIA) {
+                        nvenc_path = true;
+                        self.nvenc_args(gpu, resolution, fps, supported_accelerated_codecs, job)
+                            .await?
+                    } else {
+                        vec!["-strict".to_string(), "experimental".to_string()]
                     }
                 }
 
-                // scale to 160:-1 if width is less than 160
-                if width < 160 {
-                    args.extend(["-vf".to_string(), "scale=160:-1".to_string()]);
+                ConverterFormat::GIF => {
+                    vec![
+                        "-filter_complex".to_string(),
+                        format!(
+                            "[0:v:0]fps={},scale={}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse=dither=bayer[gif]",
+                            gif_fps,
+                            gif_width
+                        ),
+                        "-map".to_string(),
+                        "[gif]".to_string(),
+                        "-loop".to_string(),
+                        "0".to_string(),
+                        "-strict".to_string(),
+                        "experimental".to_string(),
+                    ]
                 }
 
-                args.extend([
-                    "-c:a".to_string(),
-                    "aac".to_string(),
+                ConverterFormat::DIVX => vec![
+                    "-f".to_string(),
+                    "avi".to_string(),
                     "-strict".to_string(),
                     "experimental".to_string(),
-                ]);
+                ],
 
-                args
-            }
-
-            ConverterFormat::GIF => {
-                vec![
-                   "-filter_complex".to_string(), 
-                   format!(
-                    "fps={},scale=800:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse=dither=bayer",
-                    fps.min(24)
-                   )
-                ]
-            }
-
-            ConverterFormat::WMV => {
-                let encoder = self
-                    .accelerated_or_default_codec(gpu, &["wmv2", "wmv3"], "wmv2")
-                    .await;
-                vec![
-                    "-c:v".to_string(),
-                    encoder,
-                    "-c:a".to_string(),
-                    "wmav2".to_string(),
-                ]
-            }
-
-            ConverterFormat::WebM => {
-                let encoder = self
-                    .accelerated_or_default_codec(gpu, &["av1", "vp9", "vp8"], "libvpx")
-                    .await;
-                vec![
-                    "-c:v".to_string(),
-                    encoder.to_string(),
-                    "-c:a".to_string(),
-                    "libvorbis".to_string(),
-                ]
-            }
-
-            ConverterFormat::NUT | ConverterFormat::AVI => vec![
-                "-c:v".to_string(),
-                "mpeg4".to_string(),
-                "-c:a".to_string(),
-                "libmp3lame".to_string(),
-            ],
-
-            ConverterFormat::MPEG | ConverterFormat::MPG | ConverterFormat::VOB => {
-                let encoder = self
-                    .accelerated_or_default_codec(gpu, &["mpeg2"], "mpeg2video")
-                    .await;
-                vec![
-                    "-c:v".to_string(),
-                    encoder,
-                    "-c:a".to_string(),
-                    "mp2".to_string(),
-                ]
-            }
-
-            // there is more formats that mxf supports (e.g. on cameras)
-            ConverterFormat::MXF => {
-                let encoder = self
-                    .accelerated_or_default_codec(gpu, &["mpeg2"], "mpeg2video")
-                    .await;
-                vec![
-                    "-c:v".to_string(),
-                    encoder,
-                    "-c:a".to_string(),
-                    "pcm_s16le".to_string(),
+                ConverterFormat::SWF => vec![
+                    "-f".to_string(),
+                    "swf".to_string(),
                     "-strict".to_string(),
-                    "unofficial".to_string(),
-                ]
+                    "experimental".to_string(),
+                ],
+
+                // amv only supports two tracks - 1 video and 1 audio
+                // ignore extra tracks, and if no audio track, add silent audio track
+                ConverterFormat::AMV => {
+                    if !has_usable_audio {
+                        vec![
+                            "-f".to_string(),
+                            "lavfi".to_string(),
+                            "-i".to_string(),
+                            "anullsrc=channel_layout=mono:sample_rate=22050".to_string(),
+                            "-map".to_string(),
+                            "0:v:0".to_string(),
+                            "-map".to_string(),
+                            "1:a:0".to_string(),
+                            "-shortest".to_string(),
+                            "-strict".to_string(),
+                            "experimental".to_string(),
+                        ]
+                    } else {
+                        vec![
+                            "-map".to_string(),
+                            "0:v:0".to_string(),
+                            "-map".to_string(),
+                            "0:a:0".to_string(),
+                            "-strict".to_string(),
+                            "experimental".to_string(),
+                        ]
+                    }
+                }
+
+                ConverterFormat::RM | ConverterFormat::RMVB => {
+                    warn!(
+                        "encoding to {} is not supported, skipping job {}",
+                        self.to, job.id
+                    );
+                    return Err(anyhow::anyhow!("encoding to {} is not supported", self.to));
+                }
+
+                // probably not a good practice but lol, if it generates a bad file then it's
+                // likely the user doing some weird settings override lol
+                _ => vec!["-strict".to_string(), "experimental".to_string()],
             }
-
-            ConverterFormat::OGV => vec![
-                "-c:v".to_string(),
-                "libtheora".to_string(),
-                "-c:a".to_string(),
-                "libvorbis".to_string(),
-            ],
-
-            ConverterFormat::RM | ConverterFormat::RMVB => {
-                warn!("Encoding to RM/RMVB is not supported");
-                return Err(anyhow::anyhow!("Encoding to RM/RMVB is not supported"));
-            }
-
-            ConverterFormat::DIVX => vec![
-                "-f".to_string(),
-                "avi".to_string(),
-                "-c:v".to_string(),
-                "mpeg4".to_string(),
-                "-c:a".to_string(),
-                "libmp3lame".to_string(),
-            ],
-
-            ConverterFormat::SWF => vec![
-                "-f".to_string(),
-                "swf".to_string(),
-                "-c:v".to_string(),
-                "flv".to_string(),
-                "-c:a".to_string(),
-                "libmp3lame".to_string(),
-                "-b:a".to_string(),
-                "192k".to_string(),
-            ],
-
-            ConverterFormat::ASF => vec![
-                "-c:v".to_string(),
-                "msmpeg4v3".to_string(),
-                "-c:a".to_string(),
-                "wmav2".to_string(),
-            ],
-
-            ConverterFormat::AMV => vec![
-                "-c:v".to_string(),
-                "amv".to_string(),
-                "-c:a".to_string(),
-                "adpcm_ima_amv".to_string(),
-                "-ac".to_string(),
-                "1".to_string(),
-                "-ar".to_string(),
-                "22050".to_string(),
-                "-r".to_string(),
-                "25".to_string(),
-                "-block_size".to_string(),
-                "882".to_string(),
-                "-strict".to_string(),
-                "-1".to_string(),
-            ],
         };
 
-        let conversion_opts = conversion_opts
+        let extra_conversion_args = conversion_opts
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
 
-        let result = [
-            conversion_opts,
-            self.to.conversion_into_args(speed, gpu, bitrate),
-        ]
-        .concat();
+        let mut result = extra_conversion_args;
+
+        if !remux && !matches!(self.to, ConverterFormat::AMV | ConverterFormat::GIF) {
+            result.extend(["-map".to_string(), "0:v:0".to_string()]);
+        }
+
+        // auto video codec
+        if auto_video_codec && !remux && !nvenc_path {
+            if let Some(preferred_video_encoder) = self
+                .preferred_video_encoder(gpu, supported_accelerated_codecs)
+                .await
+            {
+                Self::insert_codec_arg(&mut result, "-c:v", preferred_video_encoder);
+            }
+        }
+
+        // apply custom settings if provided and not "auto"
+        // custom fps
+        if let Some(custom_fps) = Self::custom_value(&settings.fps) {
+            if let Ok(fps_val) = custom_fps.parse::<u32>() {
+                result.extend(["-r".to_string(), fps_val.to_string()]);
+            }
+        }
+
+        // custom resolution
+        if self.to != ConverterFormat::GIF {
+            if let Some(custom_res) = Self::custom_value(&settings.resolution) {
+                if let Some((w, h)) = custom_res.split_once('x') {
+                    if w.parse::<u32>().is_ok() && h.parse::<u32>().is_ok() {
+                        Self::append_video_filter(&mut result, &format!("scale={}:{}", w, h));
+                    }
+                }
+            }
+        }
+
+        // custom audio bitrate
+        if let Some(audio_br) = Self::custom_value(&settings.audio_bitrate) {
+            result.extend(["-b:a".to_string(), format!("{}k", audio_br)]);
+        }
+
+        // custom audio channels
+        if let Some(audio_ch) = Self::custom_value(&settings.audio_channels) {
+            result.extend(["-ac".to_string(), audio_ch.to_string()]);
+        }
+
+        // custom video codec
+        if let Some(video_codec) = Self::custom_value(&settings.video_codec) {
+            Self::insert_codec_arg(&mut result, "-c:v", video_codec.to_string());
+        }
+
+        // custom audio codec
+        if let Some(audio_codec) = Self::custom_value(&settings.audio_codec) {
+            Self::insert_codec_arg(&mut result, "-c:a", audio_codec.to_string());
+        }
+
+        // custom sample rate
+        if let Some(sample_r) = Self::custom_value(&settings.sample_rate) {
+            result.extend(["-ar".to_string(), sample_r.to_string()]);
+        }
+
+        Self::append_constraint_args(&mut result, &cap_args);
+
+        // grab the final encoder and get the right speed settings
+        let video_encoder = result
+            .windows(2)
+            .rev()
+            .find(|args| args[0] == "-c:v")
+            .map(|args| args[1].clone())
+            .unwrap_or_default();
+        let video_bitrate = Self::custom_value(&settings.video_bitrate)
+            .and_then(|value| value.parse::<u64>().ok())
+            .map_or(effective_bitrate, |kbps| kbps * 1_000);
+        result.extend(speed.to_args(&video_encoder, &self.to, video_bitrate));
+
+        let supports_audio =
+            codecs::codec_support_for(self.to).is_some_and(|(_, audio)| !audio.is_empty());
+        if !supports_audio {
+            result.push("-an".to_string());
+        } else {
+            for (output_index, stream) in audio_streams.iter().enumerate() {
+                // only allows one audio stream
+                if matches!(self.to, ConverterFormat::AMV | ConverterFormat::SWF)
+                    && output_index > 0
+                {
+                    break;
+                }
+                if self.to != ConverterFormat::AMV {
+                    result.extend(["-map".to_string(), format!("0:{}", stream.index)]);
+                }
+
+                // copy if possible, else encode
+                let copy = !requires_audio_encoding
+                    && codecs::support_audio_codec(self.to, &stream.codec_name.to_lowercase());
+                let encoder = if copy { "copy" } else { &audio_codec };
+                anyhow::ensure!(!encoder.is_empty(), "no audio encoder for {}", self.to);
+                info!(
+                    "job {} audio input stream {} ({}) -> output a:{} using {}",
+                    job.id, stream.index, stream.codec_name, output_index, encoder
+                );
+                result.extend([format!("-c:a:{}", output_index), encoder.to_string()]);
+
+                // webm + opus needs to be stereo
+                // "Invalid channel layout 4.0 for specified mapping family"
+                if !copy
+                    && self.to == ConverterFormat::WebM
+                    && matches!(encoder, "opus" | "libopus")
+                    && Self::is_auto(&settings.audio_channels)
+                {
+                    result.extend([format!("-ac:a:{}", output_index), "2".to_string()]);
+                }
+            }
+
+            // add empty audio track since amv requires an audio track
+            if self.to == ConverterFormat::AMV && !has_usable_audio {
+                result.extend(["-c:a:0".to_string(), audio_codec.clone()]);
+            }
+        }
+
+        if flatten_alpha {
+            Self::append_video_filter(
+                &mut result,
+                "format=rgba,geq=r='r(X,Y)*alpha(X,Y)/255':g='g(X,Y)*alpha(X,Y)/255':b='b(X,Y)*alpha(X,Y)/255':a=255,format=yuv420p",
+            );
+        }
+
+        if !has_usable_audio {
+            info!(
+                "job {} has no usable audio track, or has malformed metadata",
+                job.id
+            );
+        }
 
         Ok(result)
+    }
+
+    async fn remux_args(
+        &self,
+        gpu: &ConverterGPU,
+        supported_accelerated_codecs: &[String],
+        job: &Job,
+        remux: &[String],
+    ) -> Vec<String> {
+        let mut args = vec!["-map".to_string(), "0:v:0".to_string()];
+        if matches!(self.to, ConverterFormat::MTS | ConverterFormat::TS) {
+            args.extend(["-avoid_negative_ts".to_string(), "make_zero".to_string()]);
+        }
+        let Some((supported_video_codecs, _)) = codecs::codec_support_for(self.to) else {
+            return args;
+        };
+
+        let remux_video = remux.contains(&"video".to_string());
+
+        if remux_video {
+            args.extend(["-c:v".to_string(), "copy".to_string()]);
+        } else if let Some(preferred_video_codec) = supported_video_codecs.first() {
+            let default_encoder = Self::default_encoder_for_codec(preferred_video_codec);
+            let encoder = self
+                .accelerated_or_default_codec(
+                    gpu,
+                    &[*preferred_video_codec][..],
+                    &default_encoder,
+                    supported_accelerated_codecs,
+                )
+                .await;
+            args.extend(["-c:v".to_string(), encoder]);
+        }
+
+        args.extend(["-strict".to_string(), "experimental".to_string()]);
+
+        info!("performing remux for job {}", job.id);
+
+        args
     }
 }
