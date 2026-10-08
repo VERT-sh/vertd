@@ -63,6 +63,14 @@ impl ConverterFormat {
             _ => &[],
         }
     }
+
+    // containers that can only carry a single video stream
+    fn supports_single_video_stream(&self) -> bool {
+        matches!(
+            self,
+            Self::GIF | Self::AMV | Self::SWF | Self::H264 | Self::WEBP | Self::APNG
+        )
+    }
 }
 
 pub struct Conversion {
@@ -272,14 +280,6 @@ impl Conversion {
         let final_fps = Self::custom_value(&settings.fps)
             .and_then(|value| value.parse::<u32>().ok())
             .unwrap_or(fps);
-        if self.to == ConverterFormat::AMV {
-            if let Some(sample_rate) = Self::custom_value(&settings.sample_rate) {
-                anyhow::ensure!(
-                    sample_rate.parse::<u32>().ok() == Some(22_050),
-                    "AMV requires a sample rate of 22050 Hz"
-                );
-            }
-        }
 
         let auto_video_bitrate = Self::is_auto(&settings.video_bitrate);
         let auto_fps = Self::is_auto(&settings.fps);
@@ -494,7 +494,16 @@ impl Conversion {
         let mut result = extra_conversion_args;
 
         if !remux && !matches!(self.to, ConverterFormat::AMV | ConverterFormat::GIF) {
-            result.extend(["-map".to_string(), "0:v:0".to_string()]);
+            // map every video stream (excluding cover art/pictures)
+            let video_indices = job.video_stream_indices().await?;
+            let video_indices = if self.to.supports_single_video_stream() {
+                video_indices.into_iter().take(1).collect::<Vec<u32>>()
+            } else {
+                video_indices
+            };
+            for index in &video_indices {
+                result.extend(["-map".to_string(), format!("0:{}", index)]);
+            }
         }
 
         // auto video codec

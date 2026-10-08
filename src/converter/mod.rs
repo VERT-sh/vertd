@@ -120,9 +120,14 @@ impl Converter {
         job: &mut Job,
         gpu: &gpu::ConverterGPU,
         vaapi_device_path: Option<&str>,
-    ) -> anyhow::Result<(mpsc::Receiver<ProgressUpdate>, tokio::process::Child)> {
+    ) -> anyhow::Result<(
+        mpsc::Receiver<ProgressUpdate>,
+        tokio::process::Child,
+        job::LogBuffer,
+    )> {
         self.settings.validate()?;
         let (tx, rx) = mpsc::channel(256);
+        let log_buffer = job::new_log_buffer();
         let input_filename = format!("input/{}.{}", job.id, self.conversion.from);
         let output_filename = format!("output/{}.{}", job.id, self.conversion.to);
 
@@ -220,16 +225,20 @@ impl Converter {
             .take()
             .ok_or_else(|| anyhow!("failed to take stderr"))?;
 
-        let tx_arc = Arc::new(tx);
-
-        let tx = Arc::clone(&tx_arc);
-
+        let stderr_logs = Arc::clone(&log_buffer);
         tokio::spawn(async move {
             let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                error!("{}", line);
-                if tx.try_send(ProgressUpdate::Error(line)).is_err() {
-                    continue;
+            loop {
+                match lines.next_line().await {
+                    Ok(Some(line)) => {
+                        error!("{}", line);
+                        job::push_log(&stderr_logs, line).await;
+                    }
+                    Ok(None) => break, // stderr closed cleanly
+                    Err(e) => {
+                        error!("failed to read ffmpeg stderr: {}", e);
+                        break;
+                    }
                 }
             }
         });
@@ -240,36 +249,48 @@ impl Converter {
             .ok_or_else(|| anyhow!("failed to take stdout"))?;
         let reader = BufReader::new(stdout);
 
-        let tx = Arc::clone(&tx_arc);
-
         tokio::spawn(async move {
             let mut lines = reader.lines();
-            while let Ok(Some(out)) = lines.next_line().await {
+            let mut last_frames = None;
+            let mut last_fps_bucket = None;
+            loop {
+                let out = match lines.next_line().await {
+                    Ok(Some(out)) => out,
+                    Ok(None) => break, // stdout closed cleanly
+                    Err(e) => {
+                        error!("failed to read ffmpeg progress output: {}", e);
+                        break;
+                    }
+                };
+
                 let mut map = HashMap::new();
-                for line in out.split("\n") {
-                    if let Some((k, v)) = line.split_once("=") {
+                for line in out.split('\n') {
+                    if let Some((k, v)) = line.split_once('=') {
                         map.insert(k.trim(), v.trim());
                     }
                 }
 
-                let mut reports = Vec::new();
-
-                if let Some(frame) = map.get("frame").and_then(|s| s.parse().ok()) {
-                    reports.push(ProgressUpdate::Frame(frame));
+                if let Some(frame) = map.get("frame").and_then(|s| s.parse::<u64>().ok()) {
+                    if last_frames != Some(frame) {
+                        last_frames = Some(frame);
+                        if tx.send(ProgressUpdate::Frame(frame)).await.is_err() {
+                            break;
+                        }
+                    }
                 }
 
-                if let Some(fps) = map.get("fps").and_then(|s| s.parse().ok()) {
-                    reports.push(ProgressUpdate::FPS(fps));
-                }
-
-                for report in reports {
-                    if tx.try_send(report).is_err() {
-                        continue;
+                if let Some(fps) = map.get("fps").and_then(|s| s.parse::<f64>().ok()) {
+                    let bucket = (fps * 10.0).round() as i64;
+                    if last_fps_bucket != Some(bucket) {
+                        last_fps_bucket = Some(bucket);
+                        if tx.send(ProgressUpdate::FPS(fps)).await.is_err() {
+                            break;
+                        }
                     }
                 }
             }
         });
 
-        Ok((rx, process))
+        Ok((rx, process, log_buffer))
     }
 }

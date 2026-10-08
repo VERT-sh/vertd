@@ -12,7 +12,7 @@ use crate::{
     converter::{
         format::ConverterFormat,
         gpu::ConverterGPU,
-        job::{JobState, ProgressUpdate},
+        job::{new_log_buffer, push_log, snapshot_logs, JobState, LogBuffer, ProgressUpdate},
         speed::ConversionSpeed,
         ConversionSettings, Converter,
     },
@@ -77,6 +77,26 @@ async fn send_ws_message_timeout(session: &mut actix_ws::Session, message: Messa
             false
         }
     }
+}
+
+async fn combine_logs(logs: &LogBuffer, fallback_logs: &LogBuffer) -> String {
+    let logs = snapshot_logs(logs).await;
+    let fallback_logs = snapshot_logs(fallback_logs).await;
+
+    if logs.is_empty() && fallback_logs.is_empty() {
+        return "No error logs.".to_string();
+    }
+
+    if fallback_logs.is_empty() {
+        return logs.join("\n");
+    }
+
+    let mut message = String::new();
+    message.push_str("-- Original logs --\n");
+    message.push_str(&logs.join("\n"));
+    message.push_str("\n\n-- CPU fallback logs --\n");
+    message.push_str(&fallback_logs.join("\n"));
+    message
 }
 
 #[get("/ws")]
@@ -341,9 +361,9 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     continue;
                 }
 
-                let (mut rx, process) =
+                let (mut rx, process, original_logs) =
                     match convert_result.expect("setup result set when not cancelled") {
-                        Ok((rx, process)) => (rx, process),
+                        Ok((rx, process, log_buffer)) => (rx, process, log_buffer),
                         Err(e) => {
                             // remove job if somehow job never was able to start
                             if let Some(job) = APP_STATE.lock().await.jobs.get_mut(&job_id) {
@@ -378,8 +398,8 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         }
                     };
 
-                let mut logs = Vec::new();
-                let mut fallback_logs = Vec::new();
+                let logs = original_logs;
+                let mut fallback_logs = new_log_buffer();
                 let mut is_fallback = false;
                 let mut job_cancelled = false;
                 let mut disconnected_while_waiting = false;
@@ -401,9 +421,9 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                 match update {
                                     Some(ProgressUpdate::Error(err)) => {
                                         if is_fallback {
-                                            fallback_logs.push(err);
+                                            push_log(&fallback_logs, err).await;
                                         } else {
-                                            logs.push(err)
+                                            push_log(&logs, err).await;
                                         }
                                     }
                                     Some(progress) => {
@@ -545,9 +565,9 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                 if !status.success() {
                                     let error = format!("FFmpeg exited with {}", status);
                                     if is_fallback {
-                                        fallback_logs.push(error);
+                                        push_log(&fallback_logs, error).await;
                                     } else {
-                                        logs.push(error);
+                                        push_log(&logs, error).await;
                                     }
                                 }
                                 status.success()
@@ -595,9 +615,9 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                             log::info!("attempting CPU fallback for job {}", job_id);
                             let converter =
                                 Converter::new(from, to, speed.clone(), settings.clone());
-                            let (new_rx, new_process) =
+                            let (new_rx, new_process, new_log_buffer) =
                                 match converter.convert(&mut job, &ConverterGPU::CPU, None).await {
-                                    Ok((rx, process)) => (rx, process),
+                                    Ok((rx, process, log_buffer)) => (rx, process, log_buffer),
                                     Err(e) => {
                                         if let Some(job) =
                                             APP_STATE.lock().await.jobs.get_mut(&job_id)
@@ -623,6 +643,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                 };
                             rx = new_rx;
                             process_opt = Some(new_process);
+                            fallback_logs = new_log_buffer;
                             is_fallback = true;
                             if !send_ws_message(&mut session, Message::JobRetried { job_id }).await
                             {
@@ -641,22 +662,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                             drop(app_state);
                             log::error!("job {} failed", job_id);
 
-                            let error_message = if logs.is_empty() {
-                                "No error logs.".to_string()
-                            } else {
-                                // combine original and fallback logs if available
-                                // ideally cpu wouldn't fail and we wouldn't need this, but who knows
-                                let mut message = String::new();
-                                if !fallback_logs.is_empty() {
-                                    message.push_str("-- Original logs --\n");
-                                    message.push_str(&logs.join("\n"));
-                                    message.push_str("\n\n-- CPU fallback logs --\n");
-                                    message.push_str(&fallback_logs.join("\n"));
-                                } else {
-                                    message.push_str(&logs.join("\n"));
-                                }
-                                message
-                            };
+                            let error_message = combine_logs(&logs, &fallback_logs).await;
 
                             if !send_ws_message(
                                 &mut session,
@@ -754,7 +760,7 @@ async fn handle_job_failure(
     let mentions = std::env::var("WEBHOOK_PINGS").unwrap_or_else(|_| "".to_string());
 
     let mut files = BTreeMap::new();
-    files.insert(format!("{}.log", job_id), logs.as_bytes().to_vec());
+    files.insert(format!("{}.log", job_id), logs.into_bytes());
 
     let client = DiscordWebhook::new(&client_url)?;
     let message = message::Message::new(|m| {

@@ -1,11 +1,31 @@
 use log::warn;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
-use tokio::sync::OnceCell;
+use tokio::sync::{Mutex, OnceCell};
 use uuid::Uuid;
 
 pub const FFPROBE_TIMEOUT: Duration = Duration::from_secs(60);
+
+pub type LogBuffer = Arc<Mutex<VecDeque<String>>>;
+
+pub fn new_log_buffer() -> LogBuffer {
+    Arc::new(Mutex::new(VecDeque::new()))
+}
+
+pub async fn push_log(buffer: &LogBuffer, line: String) {
+    let mut logs = buffer.lock().await;
+    if logs.len() >= 200 {
+        logs.pop_front();
+    }
+    logs.push_back(line);
+}
+
+pub async fn snapshot_logs(buffer: &LogBuffer) -> Vec<String> {
+    buffer.lock().await.iter().cloned().collect()
+}
 
 async fn run_ffprobe(args: &[&str]) -> anyhow::Result<std::process::Output> {
     let child = Command::new("ffprobe")
@@ -41,6 +61,24 @@ fn validate_ffprobe_output(
     ))
 }
 
+// parse fps which could be in the form of "30", "29.97", or "30000/1001"
+fn parse_fps(value: &str) -> Option<u32> {
+    let value = value.trim();
+    if let Some((numerator, denominator)) = value.split_once('/') {
+        match (
+            numerator.trim().parse::<f64>(),
+            denominator.trim().parse::<f64>(),
+        ) {
+            (Ok(numerator), Ok(denominator)) if denominator != 0.0 => {
+                Some((numerator / denominator).round() as u32)
+            }
+            _ => None,
+        }
+    } else {
+        value.parse::<f64>().ok().map(|fps| fps.round() as u32)
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Job {
@@ -53,13 +91,15 @@ pub struct Job {
     bitrate: Option<u64>,
     fps: Option<u32>,
     #[serde(skip)]
-    video: OnceCell<VideoProbe>,
+    video: OnceCell<VideoMetadata>,
     #[serde(skip)]
     audio: OnceCell<Vec<AudioStream>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct VideoProbe {
+    #[serde(default)]
+    index: u32,
     #[serde(default)]
     codec_name: String,
     #[serde(default)]
@@ -72,11 +112,39 @@ pub struct VideoProbe {
     r_frame_rate: String,
     #[serde(default)]
     bit_rate: Option<String>,
+    #[serde(default)]
+    disposition: StreamDisposition,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct StreamDisposition {
+    #[serde(default)]
+    pub attached_pic: u32,
+}
+
+impl VideoProbe {
+    fn is_attached_picture(&self) -> bool {
+        self.disposition.attached_pic != 0
+    }
 }
 
 #[derive(Deserialize)]
 struct Streams<T> {
     streams: Vec<T>,
+    #[serde(default)]
+    format: Option<FormatInfo>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct FormatInfo {
+    #[serde(default)]
+    pub duration: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct VideoMetadata {
+    streams: Vec<VideoProbe>,
+    duration_secs: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -139,7 +207,7 @@ impl Job {
             return Ok(bitrate);
         }
 
-        let probe = self.video_probe().await?;
+        let probe = self.primary_video_stream().await?;
         let (width, height) = (probe.width, probe.height);
         let default_bitrate = match (width, height) {
             (w, h) if w >= 3840 || h >= 2160 => 30_000_000, // >4K - 30 Mbps
@@ -175,36 +243,26 @@ impl Job {
             return Ok(total_frames);
         }
 
-        let path = format!("input/{}.{}", self.id, self.from);
-
-        let output = run_ffprobe(&[
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-count_packets",
-            "-show_entries",
-            "stream=nb_read_packets",
-            "-of",
-            "csv=p=0",
-            &path,
-        ])
-        .await?;
-
-        validate_ffprobe_output(&output, &path, "reading total frames")?;
-
-        let total_frames = String::from_utf8(output.stdout)
-            .map_err(|e| anyhow::anyhow!("failed to parse total frames: {}", e))?
-            .lines()
-            .find_map(|s| {
-                // Filter out non-numeric characters
-                let numeric: String = s.chars().filter(|c| c.is_numeric()).collect();
-                numeric.parse::<u64>().ok()
-            })
-            .ok_or_else(|| anyhow::anyhow!("Error parsing total frames from output"))?;
-
+        let duration_secs = self.video_metadata().await?.duration_secs;
+        let total_frames = duration_secs
+            .map(|duration| (duration * f64::from(self.fps_hint())).round() as u64)
+            .unwrap_or(0);
         self.total_frames = Some(total_frames);
         Ok(total_frames)
+    }
+
+    fn fps_hint(&self) -> u32 {
+        self.video
+            .get()
+            .and_then(|metadata| {
+                metadata
+                    .streams
+                    .iter()
+                    .find(|probe| !probe.is_attached_picture())
+                    .or_else(|| metadata.streams.first())
+            })
+            .and_then(|probe| parse_fps(&probe.r_frame_rate))
+            .unwrap_or(30)
     }
 
     pub async fn fps(&mut self) -> anyhow::Result<u32> {
@@ -212,7 +270,7 @@ impl Job {
             return Ok(fps);
         }
 
-        let probe = self.video_probe().await?;
+        let probe = self.primary_video_stream().await?;
         let fps_trim = probe.r_frame_rate.trim();
 
         if fps_trim.is_empty() {
@@ -222,17 +280,7 @@ impl Job {
             return Ok(default);
         }
 
-        // parse fps which could be in the form of "30", "29.97", or "30000/1001"
-        let parsed = if let Some((n_str, d_str)) = fps_trim.split_once('/') {
-            match (n_str.trim().parse::<f64>(), d_str.trim().parse::<f64>()) {
-                (Ok(n), Ok(d)) if d != 0.0 => Some((n / d).round() as u32),
-                _ => None,
-            }
-        } else {
-            fps_trim.parse::<f64>().ok().map(|f| f.round() as u32)
-        };
-
-        let result = parsed.unwrap_or_else(|| {
+        let result = parse_fps(fps_trim).unwrap_or_else(|| {
             warn!("failed to parse fps '{}' from ffprobe", fps_trim);
             30u32
         });
@@ -242,7 +290,7 @@ impl Job {
     }
 
     pub async fn resolution(&self) -> anyhow::Result<(u32, u32)> {
-        let probe = self.video_probe().await?;
+        let probe = self.primary_video_stream().await?;
         if probe.width == 0 || probe.height == 0 {
             anyhow::bail!(
                 "failed to get resolution from ffprobe output for job {}",
@@ -253,7 +301,7 @@ impl Job {
     }
 
     pub async fn pix_fmt(&self) -> anyhow::Result<String> {
-        let probe = self.video_probe().await?;
+        let probe = self.primary_video_stream().await?;
         if probe.pix_fmt.is_empty() {
             anyhow::bail!(
                 "failed to get pixel format from ffprobe output for job {}",
@@ -263,7 +311,39 @@ impl Job {
         Ok(probe.pix_fmt.clone())
     }
 
-    async fn video_probe(&self) -> anyhow::Result<&VideoProbe> {
+    // all mapped video streams (except attached pictures) in order, falling back to the first stream
+    pub async fn video_stream_indices(&self) -> anyhow::Result<Vec<u32>> {
+        let streams = &self.video_metadata().await?.streams;
+        let indices: Vec<u32> = streams
+            .iter()
+            .filter(|probe| !probe.is_attached_picture())
+            .map(|probe| probe.index)
+            .collect();
+
+        if indices.is_empty() {
+            return Ok(vec![streams.first().map_or(0, |probe| probe.index)]);
+        }
+
+        Ok(indices)
+    }
+
+    // first non-attached-picture video stream, falling back to the first stream
+    async fn primary_video_stream(&self) -> anyhow::Result<&VideoProbe> {
+        let streams = &self.video_metadata().await?.streams;
+        let primary = streams
+            .iter()
+            .find(|probe| !probe.is_attached_picture())
+            .or_else(|| streams.first())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no video stream found in ffprobe output for job {}",
+                    self.id
+                )
+            })?;
+        Ok(primary)
+    }
+
+    async fn video_metadata(&self) -> anyhow::Result<&VideoMetadata> {
         self.video
             .get_or_try_init(|| async {
                 let path = format!("input/{}.{}", self.id, self.from);
@@ -271,9 +351,9 @@ impl Job {
                     "-v",
                     "error",
                     "-select_streams",
-                    "v:0",
+                    "v",
                     "-show_entries",
-                    "stream=codec_name,width,height,pix_fmt,r_frame_rate,bit_rate",
+                    "stream=index,codec_name,width,height,pix_fmt,r_frame_rate,bit_rate:stream_disposition=attached_pic:format=duration",
                     "-of",
                     "json",
                     &path,
@@ -285,8 +365,15 @@ impl Job {
                     serde_json::from_slice(&output.stdout).map_err(|error| {
                         anyhow::anyhow!("invalid video metadata for {}: {}", path, error)
                     })?;
-                let video = probe.streams.into_iter().next().unwrap_or_default();
-                Ok(video)
+                let duration_secs = probe
+                    .format
+                    .and_then(|format| format.duration)
+                    .and_then(|duration| duration.trim().parse::<f64>().ok())
+                    .filter(|duration| *duration > 0.0);
+                Ok(VideoMetadata {
+                    streams: probe.streams,
+                    duration_secs,
+                })
             })
             .await
     }
@@ -323,7 +410,7 @@ impl Job {
 
     // codecs.0 = video codec, codecs.1 = audio codec
     pub async fn codecs(&self) -> anyhow::Result<(String, String)> {
-        let video_codec = self.video_probe().await?.codec_name.to_lowercase();
+        let video_codec = self.primary_video_stream().await?.codec_name.to_lowercase();
         let video_codec = if video_codec.is_empty() {
             "none".to_string()
         } else {
@@ -340,7 +427,7 @@ impl Job {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "camelCase")]
 pub enum ProgressUpdate {
     #[serde(rename = "frame", rename_all = "camelCase")]
