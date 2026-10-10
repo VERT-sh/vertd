@@ -203,9 +203,10 @@ pub async fn get_gpu() -> anyhow::Result<ConverterGPU> {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         })
         .await
-        .ok_or_else(|| anyhow!("no compatible adapter found"))?;
+        .map_err(|e| anyhow!("no compatible adapter found: {}", e))?;
 
     let info = adapter.get_info();
     if info.name.contains("Apple") {

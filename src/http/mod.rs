@@ -3,7 +3,6 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
 use actix_cors::Cors;
 use actix_web::{web, App, HttpServer};
 use log::{info, warn};
-use socket2::{Domain, Protocol, Socket, Type};
 use services::{
     codecs::{codec, codec_support, codecs},
     confirm::confirm,
@@ -12,6 +11,7 @@ use services::{
     upload::upload,
     websocket::websocket,
 };
+use socket2::{Domain, Protocol, Socket, Type};
 
 use crate::http::services::keep::keep;
 

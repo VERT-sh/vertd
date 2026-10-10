@@ -44,6 +44,8 @@ pub enum ConverterFormat {
     AMV,
     ASF,
     NUT,
+    // never used as output format, obviously
+    MediaSequence,
 }
 
 impl ConverterFormat {
@@ -623,6 +625,40 @@ impl Conversion {
                 &mut result,
                 "format=rgba,geq=r='r(X,Y)*alpha(X,Y)/255':g='g(X,Y)*alpha(X,Y)/255':b='b(X,Y)*alpha(X,Y)/255':a=255,format=yuv420p",
             );
+        }
+
+        if job.sequence_kind() == Some(super::sequence::SequenceKind::FrameSequence) && !remux {
+            let preserve_alpha = settings.image_sequence_transparency.unwrap_or(false);
+
+            // force even dimensions
+            if !result.contains(&"-filter_complex".to_string()) {
+                Self::append_video_filter(&mut result, "scale=trunc(iw/2)*2:trunc(ih/2)*2");
+            }
+
+            // force pixel formats for formats that support alpha, else default to yuv420p
+            let pix_fmt = match self.to {
+                ConverterFormat::WEBP if preserve_alpha => Some("bgra"),
+                ConverterFormat::APNG if preserve_alpha => Some("rgba"),
+                ConverterFormat::WebM if preserve_alpha => Some("yuva420p"),
+                ConverterFormat::GIF | ConverterFormat::WEBP | ConverterFormat::APNG => None,
+                _ => Some(if preserve_alpha {
+                    "yuva420p"
+                } else {
+                    "yuv420p"
+                }),
+            };
+
+            if let Some(pix_fmt) = pix_fmt {
+                result.extend(["-pix_fmt".to_string(), pix_fmt.to_string()]);
+            }
+
+            if self.to == ConverterFormat::WebM && preserve_alpha {
+                result.extend(["-auto-alt-ref".to_string(), "0".to_string()]);
+            }
+
+            if self.to == ConverterFormat::APNG {
+                result.extend(["-plays".to_string(), "0".to_string()]);
+            }
         }
 
         if !has_usable_audio {

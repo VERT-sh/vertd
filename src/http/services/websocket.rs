@@ -12,7 +12,7 @@ use crate::{
     converter::{
         format::ConverterFormat,
         gpu::ConverterGPU,
-        job::{new_log_buffer, push_log, snapshot_logs, JobState, LogBuffer, ProgressUpdate},
+        job::{new_log_buffer, push_log, snapshot_logs, Job, JobState, LogBuffer, ProgressUpdate},
         speed::ConversionSpeed,
         ConversionSettings, Converter,
     },
@@ -99,6 +99,14 @@ async fn combine_logs(logs: &LogBuffer, fallback_logs: &LogBuffer) -> String {
     message
 }
 
+async fn remove_job_input(job: &Job) -> std::io::Result<()> {
+    if job.is_sequence() {
+        fs::remove_dir_all(job.input_dir()).await
+    } else {
+        fs::remove_file(job.input_path()).await
+    }
+}
+
 #[get("/ws")]
 pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
     let (res, mut session, stream) = actix_ws::handle(&req, stream)?;
@@ -120,7 +128,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                 Some(Ok(AggregatedMessage::Pong(_))) => continue,
                 Some(Ok(AggregatedMessage::Close(_))) | None => break,
                 Some(Ok(_)) => continue, // ignore binary/continuation frames we don't use
-                Some(Err(_)) => break, // transport error
+                Some(Err(_)) => break,   // transport error
             };
 
             let message: Message = match serde_json::from_str(&text) {
@@ -201,19 +209,25 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     continue;
                 }
 
-                let Ok(from) = job.from.parse::<ConverterFormat>() else {
-                    if !send_ws_message(
-                        &mut session,
-                        Message::Error {
-                            message: "invalid input format".to_string(),
-                        },
-                    )
-                    .await
-                    {
-                        break;
-                    }
+                let from = if job.is_sequence() {
+                    ConverterFormat::MediaSequence
+                } else {
+                    let Ok(from) = job.from.parse::<ConverterFormat>() else {
+                        if !send_ws_message(
+                            &mut session,
+                            Message::Error {
+                                message: "invalid input format".to_string(),
+                            },
+                        )
+                        .await
+                        {
+                            break;
+                        }
 
-                    continue;
+                        continue;
+                    };
+
+                    from
                 };
 
                 let Ok(to) = to.parse::<ConverterFormat>() else {
@@ -348,8 +362,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                 if convert_result.is_none() {
                     // cancelled / disconnected during setup, clean up
                     APP_STATE.lock().await.jobs.remove(&job_id);
-                    if let Err(e) = fs::remove_file(&format!("input/{}.{}", job.id, job.from)).await
-                    {
+                    if let Err(e) = remove_job_input(&job).await {
                         if e.kind() != ErrorKind::NotFound {
                             log::error!("failed to remove input after setup cancellation: {}", e);
                         }
@@ -499,9 +512,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                 app_state.jobs.remove(&job_id);
                             }
 
-                            if let Err(e) =
-                                fs::remove_file(&format!("input/{}.{}", job.id, job.from)).await
-                            {
+                            if let Err(e) = remove_job_input(&job).await {
                                 if e.kind() != ErrorKind::NotFound {
                                     log::error!(
                                         "failed to remove input file after cancellation: {}",
@@ -583,9 +594,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
 
                     if job_cancelled {
                         APP_STATE.lock().await.jobs.remove(&job_id);
-                        if let Err(e) =
-                            fs::remove_file(format!("input/{}.{}", job.id, job.from)).await
-                        {
+                        if let Err(e) = remove_job_input(&job).await {
                             if e.kind() != ErrorKind::NotFound {
                                 log::error!(
                                     "failed to remove cancelled input for job {}: {}",
@@ -719,7 +728,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     // wait 15 seconds to let the user decide if they want to keep the file,
                     // and also for the copy op to finish...
                     tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
-                    match fs::remove_file(&format!("input/{}.{}", job.id, job.from)).await {
+                    match remove_job_input(&job).await {
                         Ok(_) => {}
                         Err(e) => {
                             // if "no such file / os error 2", dont print it

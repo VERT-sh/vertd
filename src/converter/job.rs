@@ -7,6 +7,8 @@ use tokio::process::Command;
 use tokio::sync::{Mutex, OnceCell};
 use uuid::Uuid;
 
+use super::sequence;
+
 pub const FFPROBE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub type LogBuffer = Arc<Mutex<VecDeque<String>>>;
@@ -79,6 +81,14 @@ fn parse_fps(value: &str) -> Option<u32> {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaSequence {
+    pub kind: sequence::SequenceKind,
+    pub extension: String,
+    pub entry: String,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Job {
@@ -87,6 +97,8 @@ pub struct Job {
     pub from: String,
     pub to: Option<String>,
     pub state: JobState,
+    #[serde(default)]
+    pub sequence: Option<MediaSequence>,
     total_frames: Option<u64>,
     bitrate: Option<u64>,
     fps: Option<u32>,
@@ -162,18 +174,76 @@ pub enum JobState {
 }
 
 impl Job {
-    pub fn new(auth_token: String, from: String) -> Self {
+    pub fn new(id: Uuid, auth_token: String, from: String) -> Self {
         Self {
-            id: Uuid::new_v4(),
+            id,
             auth: auth_token,
             from,
             to: None,
             state: JobState::Processing,
+            sequence: None,
             total_frames: None,
             bitrate: None,
             fps: None,
             video: OnceCell::new(),
             audio: OnceCell::new(),
+        }
+    }
+
+    pub fn new_sequence(
+        id: Uuid,
+        auth_token: String,
+        prepared: sequence::PreparedSequence,
+    ) -> Self {
+        Self {
+            id,
+            auth: auth_token,
+            from: prepared.extension.clone(),
+            to: None,
+            state: JobState::Processing,
+            sequence: Some(MediaSequence {
+                kind: prepared.kind,
+                extension: prepared.extension,
+                entry: prepared.entry,
+            }),
+            total_frames: prepared.frame_count, // image sequences only
+            bitrate: None,
+            fps: None,
+            video: OnceCell::new(),
+            audio: OnceCell::new(),
+        }
+    }
+
+    pub fn is_sequence(&self) -> bool {
+        self.sequence.is_some()
+    }
+
+    pub fn sequence_kind(&self) -> Option<sequence::SequenceKind> {
+        self.sequence.as_ref().map(|sequence| sequence.kind)
+    }
+
+    pub fn input_path(&self) -> String {
+        match &self.sequence {
+            Some(sequence) => {
+                // ffmpeg reads the sibling files from the process cwd, so give it an absolute path
+                let relative = format!("input/{}/{}", self.id, sequence.entry);
+                std::fs::canonicalize(&relative)
+                    .map(|path| path.display().to_string())
+                    .unwrap_or(relative)
+            }
+            None => format!("input/{}.{}", self.id, self.from),
+        }
+    }
+
+    pub fn input_dir(&self) -> String {
+        format!("input/{}", self.id)
+    }
+
+    fn sequence_input_args(&self) -> &'static [&'static str] {
+        if self.sequence_kind() == Some(sequence::SequenceKind::FrameSequence) {
+            &["-f", "concat", "-safe", "0"]
+        } else {
+            &[]
         }
     }
 
@@ -346,19 +416,19 @@ impl Job {
     async fn video_metadata(&self) -> anyhow::Result<&VideoMetadata> {
         self.video
             .get_or_try_init(|| async {
-                let path = format!("input/{}.{}", self.id, self.from);
-                let output = run_ffprobe(&[
-                    "-v",
-                    "error",
+                let path = self.input_path();
+                let mut args = vec!["-v", "error"];
+                args.extend_from_slice(self.sequence_input_args());
+                args.extend_from_slice(&[
                     "-select_streams",
                     "v",
                     "-show_entries",
                     "stream=index,codec_name,width,height,pix_fmt,r_frame_rate,bit_rate:stream_disposition=attached_pic:format=duration",
                     "-of",
                     "json",
-                    &path,
-                ])
-                .await?;
+                    path.as_str(),
+                ]);
+                let output = run_ffprobe(&args).await?;
 
                 validate_ffprobe_output(&output, &path, "reading video metadata")?;
                 let probe: Streams<VideoProbe> =
@@ -385,19 +455,19 @@ impl Job {
     async fn audio_streams_probe(&self) -> anyhow::Result<&Vec<AudioStream>> {
         self.audio
             .get_or_try_init(|| async {
-                let path = format!("input/{}.{}", self.id, self.from);
-                let output = run_ffprobe(&[
-                    "-v",
-                    "error",
+                let path = self.input_path();
+                let mut args = vec!["-v", "error"];
+                args.extend_from_slice(self.sequence_input_args());
+                args.extend_from_slice(&[
                     "-select_streams",
                     "a",
                     "-show_entries",
                     "stream=index,codec_name",
                     "-of",
                     "json",
-                    &path,
-                ])
-                .await?;
+                    path.as_str(),
+                ]);
+                let output = run_ffprobe(&args).await?;
                 validate_ffprobe_output(&output, &path, "reading all audio streams")?;
                 let probe: Streams<AudioStream> =
                     serde_json::from_slice(&output.stdout).map_err(|error| {

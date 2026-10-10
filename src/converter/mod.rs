@@ -6,6 +6,7 @@ use format::{Conversion, ConverterFormat};
 use job::{Job, ProgressUpdate};
 use log::error;
 use log::info;
+use sequence::SequenceKind;
 use serde::{Deserialize, Serialize};
 use speed::ConversionSpeed;
 use tokio::io::AsyncBufReadExt as _;
@@ -18,6 +19,7 @@ pub mod constraint;
 pub mod format;
 pub mod gpu;
 pub mod job;
+pub mod sequence;
 pub mod speed;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -33,6 +35,9 @@ pub struct ConversionSettings {
     pub audio_bitrate: Option<String>,
     pub audio_channels: Option<String>,
     pub sample_rate: Option<String>,
+    #[serde(rename = "imageSequenceFPS")]
+    pub image_sequence_fps: Option<u8>,
+    pub image_sequence_transparency: Option<bool>,
 }
 
 impl ConversionSettings {
@@ -128,8 +133,32 @@ impl Converter {
         self.settings.validate()?;
         let (tx, rx) = mpsc::channel(256);
         let log_buffer = job::new_log_buffer();
-        let input_filename = format!("input/{}.{}", job.id, self.conversion.from);
+        let input_filename = job.input_path();
         let output_filename = format!("output/{}.{}", job.id, self.conversion.to);
+
+        let settings_fps: Option<f64> = match self.settings.fps.as_deref() {
+            Some(fps) if !fps.is_empty() && fps != "auto" => Some(
+                fps.parse::<f64>()
+                    .map_err(|e| anyhow!("invalid fps '{}': {}", fps, e))?,
+            ),
+            _ => None,
+        };
+
+        let frame_sequence_fps = (job.sequence_kind() == Some(SequenceKind::FrameSequence))
+            .then(|| self.settings.image_sequence_fps.unwrap_or(15));
+
+        let sequence_args: Vec<String> = match frame_sequence_fps {
+            Some(framerate) => vec![
+                "-f".to_string(),
+                "concat".to_string(),
+                "-safe".to_string(),
+                "0".to_string(),
+                "-r".to_string(),
+                framerate.to_string(),
+            ],
+            None => Vec::new(),
+        };
+        let sequence_args_refs: Vec<&str> = sequence_args.iter().map(|s| s.as_str()).collect();
 
         // use custom bitrate from speed if provided, else detect from file
         let bitrate = if let Some(bitrate) = self.speed.custom_bitrate_bps() {
@@ -138,7 +167,13 @@ impl Converter {
             job.bitrate().await?
         };
 
-        let fps = job.fps().await?;
+        let fps = match frame_sequence_fps {
+            Some(framerate) => framerate as u32,
+            None => match settings_fps {
+                Some(framerate) => framerate.round() as u32,
+                None => job.fps().await?,
+            },
+        };
         let (width, height) = job.resolution().await?;
 
         let supported_accelerated_codecs = {
@@ -180,6 +215,7 @@ impl Converter {
             ][..],
             &gpu_args_refs[..],
             self.conversion.from.input_format_args(),
+            &sequence_args_refs[..],
             &["-i", &input_filename][..],
             args,
             metadata_args,

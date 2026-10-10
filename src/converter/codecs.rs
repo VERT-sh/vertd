@@ -148,7 +148,7 @@ pub fn codec_support_for(
             &["wmv2", "wmv1"],
             &["wmav2"],
         )),
-        ConverterFormat::RM | ConverterFormat::RMVB => None,
+        ConverterFormat::RM | ConverterFormat::RMVB | ConverterFormat::MediaSequence => None,
     }
 }
 
