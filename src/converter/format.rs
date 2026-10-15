@@ -44,6 +44,9 @@ pub enum ConverterFormat {
     AMV,
     ASF,
     NUT,
+    IVF,
+    #[strum(serialize = "y4m")]
+    Y4M,
     // never used as output format, obviously
     MediaSequence,
 }
@@ -61,6 +64,8 @@ impl ConverterFormat {
             // need to tell ffmpeg .ogx is a ogg format or it'll fail
             Self::OGX => &["-f", "ogg"],
             Self::DIVX => &["-f", "avi"],
+            Self::Y4M => &["-f", "yuv4mpegpipe"],
+            Self::IVF => &["-f", "ivf"],
             Self::MXF => &["-timecode", "00:00:00:00", "-g", "128"],
             _ => &[],
         }
@@ -625,6 +630,17 @@ impl Conversion {
                 &mut result,
                 "format=rgba,geq=r='r(X,Y)*alpha(X,Y)/255':g='g(X,Y)*alpha(X,Y)/255':b='b(X,Y)*alpha(X,Y)/255':a=255,format=yuv420p",
             );
+        }
+
+        // ivf and y4m only supports yuv240p and even dimensions
+        if matches!(self.to, ConverterFormat::IVF | ConverterFormat::Y4M)
+            && !remux
+            && job.sequence_kind() != Some(super::sequence::SequenceKind::FrameSequence)
+        {
+            if !result.contains(&"-pix_fmt".to_string()) {
+                result.extend(["-pix_fmt".to_string(), "yuv420p".to_string()]);
+            }
+            Self::append_video_filter(&mut result, "scale=trunc(iw/2)*2:trunc(ih/2)*2");
         }
 
         if job.sequence_kind() == Some(super::sequence::SequenceKind::FrameSequence) && !remux {

@@ -148,6 +148,14 @@ pub fn codec_support_for(
             &["wmv2", "wmv1"],
             &["wmav2"],
         )),
+        ConverterFormat::IVF => Some((
+            &["vp8", "vp9", "av1"],
+            &[],
+        )),
+        ConverterFormat::Y4M => Some((
+            &["wrapped_avframe", "rawvideo"],
+            &[],
+        )),
         ConverterFormat::RM | ConverterFormat::RMVB | ConverterFormat::MediaSequence => None,
     }
 }
