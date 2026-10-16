@@ -12,7 +12,7 @@ use crate::{
     converter::{
         format::ConverterFormat,
         gpu::ConverterGPU,
-        job::{new_log_buffer, push_log, snapshot_logs, Job, JobState, LogBuffer, ProgressUpdate},
+        job::{format_job_logs, new_log_buffer, push_log, snapshot_logs, Job, JobState, LogBuffer, ProgressUpdate},
         speed::ConversionSpeed,
         ConversionSettings, Converter,
     },
@@ -88,14 +88,14 @@ async fn combine_logs(logs: &LogBuffer, fallback_logs: &LogBuffer) -> String {
     }
 
     if fallback_logs.is_empty() {
-        return logs.join("\n");
+        return format_job_logs(&logs);
     }
 
     let mut message = String::new();
     message.push_str("-- Original logs --\n");
-    message.push_str(&logs.join("\n"));
+    message.push_str(&format_job_logs(&logs));
     message.push_str("\n\n-- CPU fallback logs --\n");
-    message.push_str(&fallback_logs.join("\n"));
+    message.push_str(&format_job_logs(&fallback_logs));
     message
 }
 
@@ -434,9 +434,9 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                 match update {
                                     Some(ProgressUpdate::Error(err)) => {
                                         if is_fallback {
-                                            push_log(&fallback_logs, err).await;
+                                            push_log(&fallback_logs, err.message, err.repeats).await;
                                         } else {
-                                            push_log(&logs, err).await;
+                                            push_log(&logs, err.message, err.repeats).await;
                                         }
                                     }
                                     Some(progress) => {
@@ -576,9 +576,9 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                 if !status.success() {
                                     let error = format!("FFmpeg exited with {}", status);
                                     if is_fallback {
-                                        push_log(&fallback_logs, error).await;
+                                        push_log(&fallback_logs, error, 1).await;
                                     } else {
-                                        push_log(&logs, error).await;
+                                        push_log(&logs, error, 1).await;
                                     }
                                 }
                                 status.success()

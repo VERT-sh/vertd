@@ -11,22 +11,61 @@ use super::sequence;
 
 pub const FFPROBE_TIMEOUT: Duration = Duration::from_secs(60);
 
-pub type LogBuffer = Arc<Mutex<VecDeque<String>>>;
+pub type LogBuffer = Arc<Mutex<VecDeque<LogLine>>>;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogLine {
+    pub message: String,
+    pub repeats: usize,
+}
 
 pub fn new_log_buffer() -> LogBuffer {
     Arc::new(Mutex::new(VecDeque::new()))
 }
 
-pub async fn push_log(buffer: &LogBuffer, line: String) {
+pub async fn push_log(buffer: &LogBuffer, line: String, repeats: usize) {
     let mut logs = buffer.lock().await;
+    if line.trim().is_empty() {
+        return;
+    }
+
+    if let Some(last) = logs.back_mut() {
+        if last.message == line {
+            last.repeats += repeats;
+            return;
+        }
+    }
+
     if logs.len() >= 200 {
         logs.pop_front();
     }
-    logs.push_back(line);
+    logs.push_back(LogLine {
+        message: line,
+        repeats: repeats.max(1),
+    });
 }
 
-pub async fn snapshot_logs(buffer: &LogBuffer) -> Vec<String> {
+pub async fn snapshot_logs(buffer: &LogBuffer) -> Vec<LogLine> {
     buffer.lock().await.iter().cloned().collect()
+}
+
+pub fn format_job_logs(logs: &[LogLine]) -> String {
+    if logs.is_empty() {
+        return "No error logs.".to_string();
+    }
+
+    let mut message = String::new();
+    for (index, line) in logs.iter().enumerate() {
+        if index > 0 {
+            message.push('\n');
+        }
+        message.push_str(line.message.trim_end());
+        if line.repeats > 1 {
+            message.push_str(&format!(" [x{}]", line.repeats));
+        }
+    }
+    message
 }
 
 async fn run_ffprobe(args: &[&str]) -> anyhow::Result<std::process::Output> {
@@ -137,6 +176,15 @@ pub struct StreamDisposition {
 impl VideoProbe {
     fn is_attached_picture(&self) -> bool {
         self.disposition.attached_pic != 0
+    }
+
+    fn has_usable_video(&self) -> bool {
+        !self.is_attached_picture()
+            && !self.codec_name.is_empty()
+            && self.width > 0
+            && self.height > 0
+            && !self.pix_fmt.is_empty()
+            && self.pix_fmt != "unknown"
     }
 }
 
@@ -381,12 +429,12 @@ impl Job {
         Ok(probe.pix_fmt.clone())
     }
 
-    // all mapped video streams (except attached pictures) in order, falling back to the first stream
+    // all mapped video streams (except attached pictures / unusable video) in order, falling back to the first stream
     pub async fn video_stream_indices(&self) -> anyhow::Result<Vec<u32>> {
         let streams = &self.video_metadata().await?.streams;
         let indices: Vec<u32> = streams
             .iter()
-            .filter(|probe| !probe.is_attached_picture())
+            .filter(|probe| probe.has_usable_video())
             .map(|probe| probe.index)
             .collect();
 
@@ -402,7 +450,8 @@ impl Job {
         let streams = &self.video_metadata().await?.streams;
         let primary = streams
             .iter()
-            .find(|probe| !probe.is_attached_picture())
+            .find(|probe| probe.has_usable_video())
+            .or_else(|| streams.iter().find(|probe| !probe.is_attached_picture()))
             .or_else(|| streams.first())
             .ok_or_else(|| {
                 anyhow::anyhow!(
@@ -505,5 +554,5 @@ pub enum ProgressUpdate {
     #[serde(rename = "fps", rename_all = "camelCase")]
     FPS(f64),
     #[serde(rename = "error", rename_all = "camelCase")]
-    Error(String),
+    Error(LogLine),
 }

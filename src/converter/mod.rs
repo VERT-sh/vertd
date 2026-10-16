@@ -3,9 +3,8 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use format::{Conversion, ConverterFormat};
-use job::{Job, ProgressUpdate};
-use log::error;
-use log::info;
+use job::{Job, LogLine, ProgressUpdate};
+use log::{error, info, warn};
 use sequence::SequenceKind;
 use serde::{Deserialize, Serialize};
 use speed::ConversionSpeed;
@@ -21,6 +20,35 @@ pub mod gpu;
 pub mod job;
 pub mod sequence;
 pub mod speed;
+
+#[derive(Debug, PartialEq, Eq)]
+enum FfmpegLevel {
+    Warn,
+    Info,
+    Error,
+}
+
+fn ffmpeg_level(line: &str) -> FfmpegLevel {
+    let level = line
+        .split_once("] [")
+        .and_then(|(_, rest)| rest.split_once(']'))
+        .map(|(level, _)| level.trim().to_lowercase())
+        .unwrap_or_default();
+
+    match level.as_str() {
+        "warning" => FfmpegLevel::Warn,
+        "info" | "verbose" | "debug" | "trace" => FfmpegLevel::Info,
+        _ => FfmpegLevel::Error,
+    }
+}
+
+fn log_ffmpeg_line(line: &str) {
+    match ffmpeg_level(line) {
+        FfmpegLevel::Warn => warn!("{}", line),
+        FfmpegLevel::Info => info!("{}", line),
+        FfmpegLevel::Error => error!("{}", line),
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -209,7 +237,7 @@ impl Converter {
                 "-y",
                 "-hide_banner",
                 "-loglevel",
-                "error",
+                "level+warning",
                 "-progress",
                 "pipe:1",
             ][..],
@@ -264,18 +292,38 @@ impl Converter {
         let stderr_logs = Arc::clone(&log_buffer);
         tokio::spawn(async move {
             let mut lines = BufReader::new(stderr).lines();
+            let mut current: Option<LogLine> = None;
             loop {
-                match lines.next_line().await {
-                    Ok(Some(line)) => {
-                        error!("{}", line);
-                        job::push_log(&stderr_logs, line).await;
-                    }
+                let line = match lines.next_line().await {
+                    Ok(Some(line)) => line.trim_end().to_string(),
                     Ok(None) => break, // stderr closed cleanly
                     Err(e) => {
                         error!("failed to read ffmpeg stderr: {}", e);
                         break;
                     }
+                };
+
+                if line.trim().is_empty() {
+                    continue;
                 }
+
+                match &mut current {
+                    Some(entry) if entry.message == line => entry.repeats += 1,
+                    _ => {
+                        if let Some(entry) = current.take() {
+                            job::push_log(&stderr_logs, entry.message, entry.repeats).await;
+                        }
+                        log_ffmpeg_line(&line);
+                        current = Some(LogLine {
+                            message: line,
+                            repeats: 1,
+                        });
+                    }
+                }
+            }
+
+            if let Some(entry) = current {
+                job::push_log(&stderr_logs, entry.message, entry.repeats).await;
             }
         });
 

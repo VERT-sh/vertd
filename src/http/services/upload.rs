@@ -132,6 +132,7 @@ pub async fn upload(mut payload: Multipart) -> Result<impl Responder, UploadErro
                 ext.chars()
                     .filter(|c| c.is_alphanumeric())
                     .collect::<String>()
+                    .to_lowercase()
             })
             .ok_or_else(|| UploadError::NoExtension)?;
 

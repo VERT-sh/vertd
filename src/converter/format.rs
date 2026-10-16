@@ -54,8 +54,8 @@ pub enum ConverterFormat {
 impl ConverterFormat {
     pub fn input_format_args(&self) -> &'static [&'static str] {
         match self {
-            Self::MTS | Self::TS | Self::FLV | Self::NUT => &["-fflags", "+genpts"],
-            _ => &[],
+            Self::MediaSequence => &[],
+            _ => &["-fflags", "+genpts"],
         }
     }
 
@@ -112,6 +112,24 @@ impl Conversion {
             self.to, default
         );
         default.to_string()
+    }
+
+    fn nvenc_pix_fmt_override(encoder: &str, input_pix_fmt: &str) -> Option<&'static str> {
+        let supported: &[&str] = match encoder {
+            "h264_nvenc" => &["yuv420p", "nv12", "yuv444p", "nv24"],
+            "hevc_nvenc" => &[
+                "yuv420p",
+                "nv12",
+                "p010le",
+                "yuv444p",
+                "nv24",
+                "yuv444p10msble",
+            ],
+            "av1_nvenc" => &["yuv420p", "nv12", "p010le"],
+            _ => return None,
+        };
+
+        (!supported.contains(&input_pix_fmt)).then_some("yuv420p")
     }
 
     fn default_encoder_for_codec(codec: &str) -> String {
@@ -370,6 +388,7 @@ impl Conversion {
             && codecs::codec_support_for(self.to).is_some();
 
         let can_remux_video = supports_remux
+            && !matches!(self.to, ConverterFormat::MXF)
             && !requires_video_encoding
             && !flatten_alpha
             && codecs::support_video_codec(self.from, &input_video_codec)
@@ -576,6 +595,12 @@ impl Conversion {
             .find(|args| args[0] == "-c:v")
             .map(|args| args[1].clone())
             .unwrap_or_default();
+
+        if !remux && video_encoder != "copy" && !result.contains(&"-pix_fmt".to_string()) {
+            if let Some(pix_fmt) = Self::nvenc_pix_fmt_override(&video_encoder, &input_pix_fmt) {
+                result.extend(["-pix_fmt".to_string(), pix_fmt.to_string()]);
+            }
+        }
         let video_bitrate = Self::custom_value(&settings.video_bitrate)
             .and_then(|value| value.parse::<u64>().ok())
             .map_or(effective_bitrate, |kbps| kbps * 1_000);
