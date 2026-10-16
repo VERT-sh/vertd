@@ -1,4 +1,4 @@
-FROM rust:1.86 AS builder
+FROM rust:1.99.1-trixie AS builder
 
 WORKDIR /build
 
@@ -6,7 +6,7 @@ COPY . .
 
 RUN cargo build --release
 
-FROM ubuntu:24.04
+FROM debian:forky-20261005
 
 WORKDIR /app
 

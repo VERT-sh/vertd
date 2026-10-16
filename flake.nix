@@ -31,7 +31,7 @@
 
         inherit (pkgs) lib;
 
-        rustToolchain = fenix.packages.${system}.complete.withComponents [
+        rustToolchain = fenix.packages.${system}.stable.withComponents [
           "cargo"
           "clippy"
           "rust-analyzer"
@@ -55,7 +55,7 @@
         };
 
         craneLibLLvmTools = craneLib.overrideToolchain (
-          fenix.packages.${system}.complete.withComponents [
+          fenix.packages.${system}.stable.withComponents [
             "cargo"
             "llvm-tools"
             "rustc"
