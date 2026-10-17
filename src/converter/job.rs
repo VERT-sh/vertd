@@ -307,10 +307,6 @@ impl Job {
         self.state == JobState::Processing
     }
 
-    pub fn reserved(&self) -> bool {
-        self.to.is_some() && !self.completed() && !self.errored()
-    }
-
     pub fn try_start(&mut self, target: String) -> bool {
         if self.to.is_some() || self.completed() {
             return false;

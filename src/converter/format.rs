@@ -1,7 +1,7 @@
 use crate::converter::job::Job;
 
 use super::{
-    codecs, constraint::FormatConstraint, gpu::ConverterGPU, speed::ConversionSpeed,
+    codecs, constraint::FormatConstraint, gpu::ConverterGPU, pixfmt, speed::ConversionSpeed,
     ConversionSettings,
 };
 use log::{info, warn};
@@ -114,24 +114,6 @@ impl Conversion {
         default.to_string()
     }
 
-    fn nvenc_pix_fmt_override(encoder: &str, input_pix_fmt: &str) -> Option<&'static str> {
-        let supported: &[&str] = match encoder {
-            "h264_nvenc" => &["yuv420p", "nv12", "yuv444p", "nv24"],
-            "hevc_nvenc" => &[
-                "yuv420p",
-                "nv12",
-                "p010le",
-                "yuv444p",
-                "nv24",
-                "yuv444p10msble",
-            ],
-            "av1_nvenc" => &["yuv420p", "nv12", "p010le"],
-            _ => return None,
-        };
-
-        (!supported.contains(&input_pix_fmt)).then_some("yuv420p")
-    }
-
     fn default_encoder_for_codec(codec: &str) -> String {
         match codec {
             "h264" => "libx264".to_string(),
@@ -145,6 +127,19 @@ impl Conversion {
             "mp3" => "libmp3lame".to_string(),
             other => other.to_string(),
         }
+    }
+
+    // pixel format to force for `encoder` if any
+    // `h264_nvenc` cannot encode above 8 bits before Blackwell (RTX 50x), so force 8-bit if source is higher
+    fn pix_fmt_override<'a>(
+        encoder: &str,
+        input_pix_fmt: &str,
+        forced_pix_fmt: Option<&'a str>,
+    ) -> Option<&'a str> {
+        forced_pix_fmt.or_else(|| {
+            (encoder == "h264_nvenc" && pixfmt::is_high_bit_depth(input_pix_fmt))
+                .then_some("yuv420p")
+        })
     }
 
     fn is_auto(setting: &Option<String>) -> bool {
@@ -239,10 +234,10 @@ impl Conversion {
         fps: u32,
         supported_accelerated_codecs: &[String],
         job: &Job,
+        forced_pix_fmt: Option<&str>,
     ) -> anyhow::Result<Vec<String>> {
         let (width, height) = resolution;
-        let is_4k = width == 3840 || height == 2160;
-        let is_above_4k = width > 3840 || height > 2160;
+        let is_4k_up = width >= 3840 || height >= 2160;
         let pix_fmt = job.pix_fmt().await?;
 
         // choose codec
@@ -250,10 +245,10 @@ impl Conversion {
         let codecs = job.codecs().await?;
         let has_h265 = codecs.0.to_lowercase().contains("hevc");
         let has_h264 = codecs.0.to_lowercase().contains("h264");
-        let is_10bit = pix_fmt.contains("10le") || pix_fmt.contains("10be");
+        let is_high_bit_depth = pixfmt::is_high_bit_depth(&pix_fmt);
         let target_supports_hevc = codecs::support_video_codec(self.to, "hevc");
         let use_hevc =
-            target_supports_hevc && (has_h265 || (has_h264 && (is_10bit || is_4k || is_above_4k)));
+            target_supports_hevc && (has_h265 || (has_h264 && (is_high_bit_depth || is_4k_up)));
         let (codec_order, default) = if use_hevc {
             (&["hevc"][..], "libx265")
         } else {
@@ -267,9 +262,8 @@ impl Conversion {
 
         let mut args = vec!["-c:v".to_string(), encoder.clone()];
 
-        // convert to 8 bit if 10 bit on h264_nvenc
-        if is_10bit && encoder == "h264_nvenc" {
-            args.extend(["-pix_fmt".to_string(), "yuv420p".to_string()]);
+        if let Some(forced) = Self::pix_fmt_override(&encoder, &pix_fmt, forced_pix_fmt) {
+            args.extend(["-pix_fmt".to_string(), forced.to_string()]);
         }
 
         if fps > 240 {
@@ -296,6 +290,7 @@ impl Conversion {
         supported_accelerated_codecs: &[String],
         job: &super::job::Job,
         settings: &ConversionSettings,
+        forced_pix_fmt: Option<&str>,
     ) -> anyhow::Result<Vec<String>> {
         settings.validate()?;
         let audio_codec = Self::custom_value(&settings.audio_codec)
@@ -431,8 +426,15 @@ impl Conversion {
                 | ConverterFormat::H264 => {
                     if matches!(gpu, ConverterGPU::NVIDIA) {
                         nvenc_path = true;
-                        self.nvenc_args(gpu, resolution, fps, supported_accelerated_codecs, job)
-                            .await?
+                        self.nvenc_args(
+                            gpu,
+                            resolution,
+                            fps,
+                            supported_accelerated_codecs,
+                            job,
+                            forced_pix_fmt,
+                        )
+                        .await?
                     } else {
                         vec!["-strict".to_string(), "experimental".to_string()]
                     }
@@ -597,7 +599,9 @@ impl Conversion {
             .unwrap_or_default();
 
         if !remux && video_encoder != "copy" && !result.contains(&"-pix_fmt".to_string()) {
-            if let Some(pix_fmt) = Self::nvenc_pix_fmt_override(&video_encoder, &input_pix_fmt) {
+            if let Some(pix_fmt) =
+                Self::pix_fmt_override(&video_encoder, &input_pix_fmt, forced_pix_fmt)
+            {
                 result.extend(["-pix_fmt".to_string(), pix_fmt.to_string()]);
             }
         }

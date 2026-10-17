@@ -10,9 +10,10 @@ use uuid::Uuid;
 
 use crate::{
     converter::{
+        fallback::FailureKind,
         format::ConverterFormat,
         gpu::ConverterGPU,
-        job::{format_job_logs, new_log_buffer, push_log, snapshot_logs, Job, JobState, LogBuffer, ProgressUpdate},
+        job::{format_job_logs, push_log, snapshot_logs, Job, JobState, LogBuffer, ProgressUpdate},
         speed::ConversionSpeed,
         ConversionSettings, Converter,
     },
@@ -28,7 +29,7 @@ pub enum Message {
         token: String,
         job_id: Uuid,
         to: String,
-        settings: ConversionSettings,
+        settings: Box<ConversionSettings>,
     },
 
     #[serde(rename = "cancelJob", rename_all = "camelCase")]
@@ -79,24 +80,160 @@ async fn send_ws_message_timeout(session: &mut actix_ws::Session, message: Messa
     }
 }
 
-async fn combine_logs(logs: &LogBuffer, fallback_logs: &LogBuffer) -> String {
-    let logs = snapshot_logs(logs).await;
-    let fallback_logs = snapshot_logs(fallback_logs).await;
+struct Attempt {
+    label: String,
+    logs: LogBuffer,
+}
 
-    if logs.is_empty() && fallback_logs.is_empty() {
-        return "No error logs.".to_string();
+struct RetryState {
+    attempts: Vec<Attempt>,
+    attempted_pix_fmts: Vec<String>,
+    input_pix_fmt: String,
+    gpu: ConverterGPU,
+    allow_cpu: bool,
+    failed_encoder: String,
+}
+
+struct RetryPlan {
+    gpu: ConverterGPU,
+    pix_fmt: Option<&'static str>,
+    label: String,
+}
+
+impl RetryState {
+    fn new(logs: LogBuffer, input_pix_fmt: String, gpu: ConverterGPU, allow_cpu: bool) -> Self {
+        Self {
+            attempts: vec![Attempt {
+                label: "initial".to_string(),
+                logs,
+            }],
+            attempted_pix_fmts: Vec::new(),
+            input_pix_fmt,
+            gpu,
+            allow_cpu,
+            failed_encoder: String::new(),
+        }
     }
 
-    if fallback_logs.is_empty() {
-        return format_job_logs(&logs);
+    fn current_logs(&self) -> &LogBuffer {
+        &self.attempts[self.attempts.len() - 1].logs
+    }
+
+    fn retries(&self) -> usize {
+        self.attempts.len() - 1
+    }
+
+    fn plan(&mut self, kind: FailureKind) -> Option<RetryPlan> {
+        use crate::converter::fallback::{next_action, RetryAction};
+
+        match next_action(
+            kind,
+            &self.failed_encoder,
+            &self.input_pix_fmt,
+            &self.attempted_pix_fmts,
+            self.gpu != ConverterGPU::CPU,
+        )? {
+            RetryAction::PixFmt(pix_fmt) => {
+                self.attempted_pix_fmts.push(pix_fmt.to_string());
+                Some(RetryPlan {
+                    gpu: self.gpu,
+                    pix_fmt: Some(pix_fmt),
+                    label: format!("pix_fmt={pix_fmt}"),
+                })
+            }
+            RetryAction::Software if self.allow_cpu => Some(RetryPlan {
+                gpu: ConverterGPU::CPU,
+                pix_fmt: None,
+                label: "software".to_string(),
+            }),
+            RetryAction::Software => None,
+        }
+    }
+
+    fn record(&mut self, plan: RetryPlan, logs: LogBuffer) {
+        self.gpu = plan.gpu;
+        self.attempts.push(Attempt {
+            label: plan.label,
+            logs,
+        });
+    }
+
+    async fn start_next(
+        &mut self,
+        converter: &Converter,
+        job: &mut Job,
+        vaapi_device_path: Option<&str>,
+    ) -> Option<(
+        tokio::sync::mpsc::Receiver<ProgressUpdate>,
+        tokio::process::Child,
+    )> {
+        let stderr = format_job_logs(&snapshot_logs(self.current_logs()).await);
+        let kind = crate::converter::fallback::classify(&stderr);
+        // which encoder failed decides which formats are worth trying
+        if let Some(encoder) = crate::converter::fallback::detect_encoder(&stderr) {
+            self.failed_encoder = encoder.to_string();
+        }
+        let plan = self.plan(kind)?;
+        log::warn!(
+            "retrying job {} with {} after {}",
+            job.id,
+            plan.label,
+            kind_label(kind)
+        );
+
+        match converter
+            .convert_with_pix_fmt(job, &plan.gpu, vaapi_device_path, plan.pix_fmt)
+            .await
+        {
+            Ok((rx, process, logs)) => {
+                self.record(plan, logs);
+                Some((rx, process))
+            }
+            Err(e) => {
+                log::warn!(
+                    "retry ({}) failed to start for job {}: {}",
+                    plan.label,
+                    job.id,
+                    e
+                );
+                push_log(
+                    self.current_logs(),
+                    format!("retry ({}) failed to start: {e}", plan.label),
+                    1,
+                )
+                .await;
+                None
+            }
+        }
+    }
+}
+
+async fn attempt_report(attempts: &[Attempt]) -> String {
+    if attempts.len() == 1 {
+        return format_job_logs(&snapshot_logs(&attempts[0].logs).await);
     }
 
     let mut message = String::new();
-    message.push_str("-- Original logs --\n");
-    message.push_str(&format_job_logs(&logs));
-    message.push_str("\n\n-- CPU fallback logs --\n");
-    message.push_str(&format_job_logs(&fallback_logs));
+    for (index, attempt) in attempts.iter().enumerate() {
+        if index > 0 {
+            message.push_str("\n\n");
+        }
+        message.push_str(&format!(
+            "-- Attempt {} ({}) --\n",
+            index + 1,
+            attempt.label
+        ));
+        message.push_str(&format_job_logs(&snapshot_logs(&attempt.logs).await));
+    }
     message
+}
+
+fn kind_label(kind: FailureKind) -> &'static str {
+    match kind {
+        FailureKind::PixelFormat => "a pixel format mismatch",
+        FailureKind::Encoder => "an unsupported encoder",
+        FailureKind::Fatal => "an unrecoverable error",
+    }
 }
 
 async fn remove_job_input(job: &Job) -> std::io::Result<()> {
@@ -285,7 +422,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     }
                 };
 
-                let converter = Converter::new(from, to, speed.clone(), settings.clone());
+                let converter = Converter::new(from, to, speed.clone(), (*settings).clone());
 
                 let (gpu, vaapi_device_path) = {
                     let app_state = APP_STATE.lock().await;
@@ -411,12 +548,16 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         }
                     };
 
-                let logs = original_logs;
-                let mut fallback_logs = new_log_buffer();
-                let mut is_fallback = false;
+                let input_pix_fmt = job.pix_fmt().await.unwrap_or_default();
+                let mut retry = RetryState::new(
+                    original_logs,
+                    input_pix_fmt,
+                    gpu,
+                    env::var("ALLOW_CPU_FALLBACK").unwrap_or_else(|_| "true".to_string())
+                        != "false",
+                );
                 let mut job_cancelled = false;
                 let mut disconnected_while_waiting = false;
-                let mut current_gpu = gpu;
                 let mut process_opt = Some(process);
                 'conversion: loop {
                     // store process in case user wants to cancel
@@ -433,13 +574,14 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                             update = rx.recv() => {
                                 match update {
                                     Some(ProgressUpdate::Error(err)) => {
-                                        if is_fallback {
-                                            push_log(&fallback_logs, err.message, err.repeats).await;
-                                        } else {
-                                            push_log(&logs, err.message, err.repeats).await;
-                                        }
+                                        push_log(retry.current_logs(), err.message, err.repeats).await;
                                     }
                                     Some(progress) => {
+                                        // don't forward progress updates of retries, only the first attempt
+                                        // TODO: is this bad ux?
+                                        if retry.retries() > 0 {
+                                            continue;
+                                        }
                                         if !send_ws_message_timeout(&mut session, Message::ProgressUpdate(progress)).await {
                                             break;
                                         }
@@ -490,6 +632,8 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     }
 
                     if !conversion_finished {
+                        log::warn!("job {} cancelled or websocket closed", job_id);
+
                         // ws closed or job cancelled, clean up and exit outer loop
                         let process_to_kill = {
                             let mut app_state = APP_STATE.lock().await;
@@ -505,7 +649,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         }
 
                         // TODO: possibly allow reconnection to websocket within certain timeframe?
-                        // would need VERT ui changes, probably temporarily store job info in browser if refres/other reasons?
+                        // would need VERT ui changes, probably temporarily store job info in browser if refresh/other reasons?
                         if job_cancelled {
                             {
                                 let mut app_state = APP_STATE.lock().await;
@@ -575,11 +719,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                             Ok(status) => {
                                 if !status.success() {
                                     let error = format!("FFmpeg exited with {}", status);
-                                    if is_fallback {
-                                        push_log(&fallback_logs, error, 1).await;
-                                    } else {
-                                        push_log(&logs, error, 1).await;
-                                    }
+                                    push_log(retry.current_logs(), error, 1).await;
                                 }
                                 status.success()
                             }
@@ -616,86 +756,58 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         .unwrap_or(true);
 
                     if is_empty || !process_succeeded {
-                        // if GPU-related failure, try falling back to CPU/software conversion if allowed
-                        let cpu_fallback =
-                            env::var("ALLOW_CPU_FALLBACK").unwrap_or("true".to_string()) == "true";
-                        if current_gpu != ConverterGPU::CPU && cpu_fallback {
-                            current_gpu = ConverterGPU::CPU;
-                            log::info!("attempting CPU fallback for job {}", job_id);
-                            let converter =
-                                Converter::new(from, to, speed.clone(), settings.clone());
-                            let (new_rx, new_process, new_log_buffer) =
-                                match converter.convert(&mut job, &ConverterGPU::CPU, None).await {
-                                    Ok((rx, process, log_buffer)) => (rx, process, log_buffer),
-                                    Err(e) => {
-                                        if let Some(job) =
-                                            APP_STATE.lock().await.jobs.get_mut(&job_id)
-                                        {
-                                            job.state = JobState::Failed;
-                                        }
-                                        if !send_ws_message(
-                                            &mut session,
-                                            Message::Error {
-                                                message: format!(
-                                                    "failed to convert with CPU fallback: {}",
-                                                    e
-                                                ),
-                                            },
-                                        )
-                                        .await
-                                        {
-                                            break 'conversion;
-                                        }
-
-                                        break 'conversion;
-                                    }
-                                };
+                        if let Some((new_rx, new_process)) = retry
+                            .start_next(&converter, &mut job, vaapi_device_path.as_deref())
+                            .await
+                        {
                             rx = new_rx;
                             process_opt = Some(new_process);
-                            fallback_logs = new_log_buffer;
-                            is_fallback = true;
                             if !send_ws_message(&mut session, Message::JobRetried { job_id }).await
                             {
                                 break 'conversion;
                             }
-
                             continue 'conversion;
-                        } else {
-                            // if already CPU, CPU fallback failed, or CPU fallback not allowed, finally give up </3
-
-                            // hacky :/
-                            let mut app_state = APP_STATE.lock().await;
-                            if let Some(job) = app_state.jobs.get_mut(&job_id) {
-                                job.state = JobState::Failed;
-                            }
-                            drop(app_state);
-                            log::error!("job {} failed", job_id);
-
-                            let error_message = combine_logs(&logs, &fallback_logs).await;
-
-                            if !send_ws_message(
-                                &mut session,
-                                Message::Error {
-                                    message: error_message.clone(),
-                                },
-                            )
-                            .await
-                            {
-                                break 'conversion;
-                            }
-
-                            let from = job.from.clone();
-                            let to = to.to_string().to_string();
-
-                            tokio::spawn(async move {
-                                if let Err(e) =
-                                    handle_job_failure(job_id, from, to, error_message.clone())
-                                        .await
-                                {
-                                    log::error!("failed to handle job failure: {}", e);
-                                }
-                            });
                         }
+
+                        // nothing left to try, finally give up </3
+                        let retries = retry.retries();
+
+                        // hacky :/
+                        let mut app_state = APP_STATE.lock().await;
+                        if let Some(job) = app_state.jobs.get_mut(&job_id) {
+                            job.state = JobState::Failed;
+                        }
+                        drop(app_state);
+                        log::error!(
+                            "job {} failed after {} retr{}",
+                            job_id,
+                            retries,
+                            if retries == 1 { "y" } else { "ies" }
+                        );
+
+                        let error_message = attempt_report(&retry.attempts).await;
+
+                        if !send_ws_message(
+                            &mut session,
+                            Message::Error {
+                                message: error_message.clone(),
+                            },
+                        )
+                        .await
+                        {
+                            break 'conversion;
+                        }
+
+                        let from = job.from.clone();
+                        let to = to.to_string().to_string();
+
+                        tokio::spawn(async move {
+                            if let Err(e) =
+                                handle_job_failure(job_id, from, to, error_message.clone()).await
+                            {
+                                log::error!("failed to handle job failure: {}", e);
+                            }
+                        });
                     } else {
                         if let Some(job) = APP_STATE.lock().await.jobs.get_mut(&job_id) {
                             job.state = JobState::Completed;

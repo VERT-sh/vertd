@@ -22,6 +22,7 @@ This file covers how to get started with `vertd`.
   - [CLI arguments](#cli-arguments-1)
   - [Environment variable](#environment-variable-1)
 - [Setting a file size limit](#setting-a-file-size-limit)
+- [Automatic retries](#automatic-retries)
 
 ## Installing dependencies
 
@@ -250,3 +251,12 @@ If you plan to expose your self-hosted instance to the internet, you may want to
 The environment variable `MAX_UPLOAD_BYTES` can be set in your `.env` or in the command line, with the following example being a 2GiB limit:
 
 `$ MAX_UPLOAD_BYTES=2147483648 ./vertd`
+
+## Automatic retries
+
+When a conversion fails for any reason, some failures may be recoverable so `vertd` retries before giving up. Currently it tries these fallback paths:
+
+1. **Pixel format** - if the encoder refuses the format, `vertd` retries with progressively simpler formats (e.g. `yuv422p10le` > `yuv422p` > `p010le` > `yuv420p`).
+2. **Software encoding** - if every pixel format fails, or the encoder cannot handle the job at all (unsupported codec, resolution out of range, etc), `vertd` retries with the CPU if allowed.
+
+If these do not work then `vertd` gives up, usually due to corrupted input files or full disks.

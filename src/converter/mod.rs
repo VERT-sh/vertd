@@ -15,9 +15,11 @@ use tokio::sync::mpsc;
 
 pub mod codecs;
 pub mod constraint;
+pub mod fallback;
 pub mod format;
 pub mod gpu;
 pub mod job;
+pub mod pixfmt;
 pub mod sequence;
 pub mod speed;
 
@@ -158,6 +160,21 @@ impl Converter {
         tokio::process::Child,
         job::LogBuffer,
     )> {
+        self.convert_with_pix_fmt(job, gpu, vaapi_device_path, None)
+            .await
+    }
+
+    pub async fn convert_with_pix_fmt(
+        &self,
+        job: &mut Job,
+        gpu: &gpu::ConverterGPU,
+        vaapi_device_path: Option<&str>,
+        forced_pix_fmt: Option<&str>,
+    ) -> anyhow::Result<(
+        mpsc::Receiver<ProgressUpdate>,
+        tokio::process::Child,
+        job::LogBuffer,
+    )> {
         self.settings.validate()?;
         let (tx, rx) = mpsc::channel(256);
         let log_buffer = job::new_log_buffer();
@@ -219,6 +236,7 @@ impl Converter {
                 &supported_accelerated_codecs,
                 job,
                 &self.settings,
+                forced_pix_fmt,
             )
             .await?;
         let args = args.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
