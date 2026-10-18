@@ -6,18 +6,29 @@ use super::format::ConverterFormat;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CodecInfo {
+    /// value vertd expects when this codec is requested (e.g. "libopus")
+    pub name: String,
+    /// canonical codec family (e.g. "libopus" -> "opus")
+    pub canonical: String,
+    /// friendly display name (e.g. "opus" -> "Opus")
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CodecCatalog {
-    pub video: Vec<String>,
-    pub audio: Vec<String>,
-    pub all: Vec<String>,
+    pub video: Vec<CodecInfo>,
+    pub audio: Vec<CodecInfo>,
+    pub all: Vec<CodecInfo>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FormatCodecSupport {
     pub format: String,
-    pub video_codecs: Vec<String>,
-    pub audio_codecs: Vec<String>,
+    pub video_codecs: Vec<CodecInfo>,
+    pub audio_codecs: Vec<CodecInfo>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -177,17 +188,20 @@ pub fn all_supported_codecs() -> CodecCatalog {
         });
     }
 
-    let video = video_set.into_iter().collect::<Vec<String>>();
-    let audio = audio_set.into_iter().collect::<Vec<String>>();
-    let all = video
+    let all = video_set
         .iter()
-        .chain(audio.iter())
+        .chain(audio_set.iter())
         .cloned()
-        .collect::<BTreeSet<String>>()
-        .into_iter()
-        .collect::<Vec<String>>();
+        .collect::<BTreeSet<String>>();
+    let to_info = |codecs: BTreeSet<String>| -> Vec<CodecInfo> {
+        codecs.into_iter().map(|codec| codec_info(&codec)).collect()
+    };
 
-    CodecCatalog { video, audio, all }
+    CodecCatalog {
+        video: to_info(video_set),
+        audio: to_info(audio_set),
+        all: to_info(all),
+    }
 }
 
 pub fn format_support(format: ConverterFormat) -> Option<FormatCodecSupport> {
@@ -195,14 +209,8 @@ pub fn format_support(format: ConverterFormat) -> Option<FormatCodecSupport> {
 
     Some(FormatCodecSupport {
         format: format.to_string(),
-        video_codecs: video_codecs
-            .iter()
-            .map(|codec| codec.to_string())
-            .collect::<Vec<String>>(),
-        audio_codecs: audio_codecs
-            .iter()
-            .map(|codec| codec.to_string())
-            .collect::<Vec<String>>(),
+        video_codecs: video_codecs.iter().map(|codec| codec_info(codec)).collect(),
+        audio_codecs: audio_codecs.iter().map(|codec| codec_info(codec)).collect(),
     })
 }
 
@@ -249,6 +257,78 @@ pub fn support_audio_codec(format: ConverterFormat, codec: &str) -> bool {
     audio
         .iter()
         .any(|supported| canonical_codec(&codec) == canonical_codec(supported))
+}
+
+pub fn codec_info(codec: &str) -> CodecInfo {
+    let canonical = canonical_codec(codec).to_string();
+    let label = codec_label(&canonical);
+
+    CodecInfo {
+        name: codec.to_string(),
+        canonical,
+        label,
+    }
+}
+
+// friendly display name for a canonical codec name
+fn codec_label(canonical: &str) -> String {
+    let label = match canonical {
+        // video
+        "h264" => "H264 (AVC)",
+        "hevc" => "H265 (HEVC)",
+        "vp8" => "VP8",
+        "vp9" => "VP9",
+        "av1" => "AV1",
+        "prores" => "Apple ProRes",
+        "mpeg4" => "MPEG-4 Part 2",
+        "mpeg1video" => "MPEG-1",
+        "mpeg2video" => "MPEG-2",
+        "mjpeg" => "Motion JPEG",
+        "ljpeg" => "Lossless JPEG",
+        "dnxhd" => "Avid DNxHD",
+        "ffv1" => "FFV1",
+        "huffyuv" => "HuffYUV",
+        "theora" => "Theora",
+        "h263" => "H.263",
+        "h261" => "H.261",
+        "flv1" => "Sorenson Spark (FLV1)",
+        "wmv1" => "Windows Media Video 7",
+        "wmv2" => "Windows Media Video 8",
+        "msmpeg4v2" => "Microsoft MPEG-4 v2",
+        "msmpeg4v3" => "Microsoft MPEG-4 v3",
+        "dvvideo" => "DV",
+        "svq1" => "Sorenson Video 1",
+        "snow" => "Snow",
+        "amv" => "AMV",
+        "flashsv" => "Flash Screen Video",
+        "apng" => "APNG",
+        "webp" => "WebP",
+        "gif" => "GIF",
+
+        // audio
+        "aac" => "AAC",
+        "mp3" => "MP3",
+        "mp2" => "MP2",
+        "ac3" => "AC-3 (Dolby Digital)",
+        "eac3" => "E-AC-3 (Dolby Digital Plus)",
+        "dts" => "DTS",
+        "truehd" => "Dolby TrueHD",
+        "opus" => "Opus",
+        "vorbis" => "Vorbis",
+        "flac" => "FLAC",
+        "alac" => "ALAC",
+        "wavpack" => "WavPack",
+        "tta" => "TTA",
+        "speex" => "Speex",
+        "nellymoser" => "Nellymoser",
+        "adpcm_swf" => "ADPCM (SWF)",
+        "adpcm_ima_amv" => "ADPCM (AMV)",
+        "wmav1" => "Windows Media Audio 7",
+        "wmav2" => "Windows Media Audio 8",
+        other => other,
+    };
+
+    label.to_string()
 }
 
 fn canonical_codec(codec: &str) -> &str {

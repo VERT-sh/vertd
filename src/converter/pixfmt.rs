@@ -104,7 +104,12 @@ fn encoder_formats(encoder: &str) -> Option<&'static [&'static str]> {
         "av1_nvenc" => Some(&["yuv420p", "nv12", "p010le", "yuv420p10le"]),
 
         "libx264" => Some(&[
-            "yuv420p", "yuv422p", "yuv444p", "yuv420p10le", "yuv422p10le", "yuv444p10le",
+            "yuv420p",
+            "yuv422p",
+            "yuv444p",
+            "yuv420p10le",
+            "yuv422p10le",
+            "yuv444p10le",
         ]),
         "libx265" | "libaom-av1" => Some(&[
             "yuv420p",
@@ -133,7 +138,14 @@ fn encoder_formats(encoder: &str) -> Option<&'static [&'static str]> {
 
         "h264_qsv" => Some(&["nv12"]),
         "hevc_qsv" => Some(&[
-            "nv12", "p010le", "yuyv422", "y210le", "bgra", "x2rgb10le", "vuyx", "xv30le",
+            "nv12",
+            "p010le",
+            "yuyv422",
+            "y210le",
+            "bgra",
+            "x2rgb10le",
+            "vuyx",
+            "xv30le",
         ]),
         "av1_qsv" => Some(&["nv12", "p010le"]),
         "vp9_qsv" => Some(&["nv12", "p010le", "vuyx", "xv30le"]),
