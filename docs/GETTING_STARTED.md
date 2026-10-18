@@ -259,6 +259,9 @@ When a conversion fails for any reason, some failures may be recoverable so `ver
 1. **Pixel format** - if the encoder refuses the format, `vertd` retries with progressively simpler formats (e.g. `yuv422p10le` > `yuv422p` > `p010le` > `yuv420p`).
 2. **Software decoding** - if the hardware decoder cannot handle the input, `vertd` decodes on the CPU while still encoding on the GPU.
 3. **Stream encoding** - if the container rejects a video / audio stream `vertd` tried to copy (remuxing), it re-encodes said stream.
-4. **Software encoding** - if every pixel format fails, or the encoder cannot handle the job at all (unsupported codec, resolution out of range, etc), `vertd` retries with the CPU if allowed.
+4. **Odd resolution** - if the encoder needs even dimensions, `vertd` pads by one row/column instead of cropping or failing.
+5. **Broken timestamps** - if the muxer rejects out-of-order or missing timestamps, `vertd` regenerates and normalises them.
+6. **Incomplete metadata** - if the input cannot be probed, `vertd` retries with a larger analysis window.
+7. **Software encoding** - if every pixel format fails, or the encoder cannot handle the job at all (unsupported codec, resolution out of range, etc), `vertd` retries with the CPU if allowed.
 
 If these do not work then `vertd` gives up, usually due to corrupted input files or full disks.

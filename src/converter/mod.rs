@@ -255,6 +255,14 @@ impl Converter {
             &["-map_metadata", "-1", "-map_chapters", "-1"][..]
         };
 
+        let input_args = self.conversion.from.input_args(overrides.fix_timestamps);
+
+        let avoid_negative_args: &[&str] = if overrides.fix_timestamps {
+            &["-avoid_negative_ts", "make_zero"][..]
+        } else {
+            &[][..]
+        };
+
         let command = &[
             &[
                 "-y",
@@ -265,7 +273,8 @@ impl Converter {
                 "pipe:1",
             ][..],
             &gpu_args_refs[..],
-            self.conversion.from.input_format_args(),
+            input_args,
+            avoid_negative_args,
             &sequence_args_refs[..],
             &["-i", &input_filename][..],
             args,

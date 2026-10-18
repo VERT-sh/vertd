@@ -10,7 +10,7 @@ use uuid::Uuid;
 use super::sequence;
 
 pub const FFPROBE_TIMEOUT: Duration = Duration::from_secs(60);
-
+pub const MAX_PROBE_ATTEMPTS: u8 = 3;
 pub type LogBuffer = Arc<Mutex<VecDeque<LogLine>>>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -171,6 +171,9 @@ pub struct Job {
     total_frames: Option<u64>,
     bitrate: Option<u64>,
     fps: Option<u32>,
+    // how many times probing has been widened
+    #[serde(default)]
+    probe_attempt: u8,
     #[serde(skip)]
     video: OnceCell<VideoMetadata>,
     #[serde(skip)]
@@ -263,6 +266,7 @@ impl Job {
             total_frames: None,
             bitrate: None,
             fps: None,
+            probe_attempt: 0,
             video: OnceCell::new(),
             audio: OnceCell::new(),
         }
@@ -287,6 +291,7 @@ impl Job {
             total_frames: prepared.frame_count, // image sequences only
             bitrate: None,
             fps: None,
+            probe_attempt: 0,
             video: OnceCell::new(),
             audio: OnceCell::new(),
         }
@@ -323,6 +328,45 @@ impl Job {
         } else {
             &[]
         }
+    }
+
+    fn probe_input_args(&self) -> Vec<String> {
+        if self.probe_attempt == 0 {
+            return Vec::new();
+        }
+
+        let scale = u64::from(self.probe_attempt);
+        let probesize = 5_000_000u64.saturating_mul(scale);
+        let analyzeduration = 5_000_000u64.saturating_mul(scale);
+
+        vec![
+            "-probesize".to_string(),
+            probesize.to_string(),
+            "-analyzeduration".to_string(),
+            analyzeduration.to_string(),
+        ]
+    }
+
+    pub fn can_widen_probe(&self) -> bool {
+        self.probe_attempt < MAX_PROBE_ATTEMPTS
+    }
+
+    pub fn probe_attempts(&self) -> u8 {
+        self.probe_attempt
+    }
+
+    pub fn widen_probe(&mut self) {
+        self.probe_attempt = self.probe_attempt.saturating_add(1);
+        self.video = OnceCell::new();
+        self.audio = OnceCell::new();
+        self.total_frames = None;
+        self.bitrate = None;
+        self.fps = None;
+        log::warn!(
+            "job {} re-probing with a wider analysis window (attempt {})",
+            self.id,
+            self.probe_attempt
+        );
     }
 
     pub fn completed(&self) -> bool {
@@ -497,6 +541,8 @@ impl Job {
             .get_or_try_init(|| async {
                 let path = self.input_path();
                 let mut args = vec!["-v", "error"];
+                let probe_args = self.probe_input_args();
+                args.extend(probe_args.iter().map(String::as_str));
                 args.extend_from_slice(self.sequence_input_args());
                 args.extend_from_slice(&[
                     "-select_streams",
@@ -536,6 +582,8 @@ impl Job {
             .get_or_try_init(|| async {
                 let path = self.input_path();
                 let mut args = vec!["-v", "error"];
+                let probe_args = self.probe_input_args();
+                args.extend(probe_args.iter().map(String::as_str));
                 args.extend_from_slice(self.sequence_input_args());
                 args.extend_from_slice(&[
                     "-select_streams",

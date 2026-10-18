@@ -7,6 +7,12 @@ pub enum FailureKind {
     Encoder,
     // the hardware decoder could not handle the input, software decoding may still work
     Decode,
+    // dimensions are not a multiple of the encoder's chroma alignment
+    Alignment,
+    // timestamps are missing, negative, or out of order
+    Timestamps,
+    // ffprobe could not read enough of the input to build a command
+    Probe,
     // the muxer rejected an audio stream we tried to copy
     AudioCopy,
     // the muxer rejected a video stream we tried to copy
@@ -22,6 +28,10 @@ pub struct RetryOverrides {
     pub pix_fmt: Option<&'static str>,
     // decode in software while still using the hardware encoder
     pub sw_decode: bool,
+    // pad to the encoder's chroma alignment instead of failing on odd dimensions
+    pub pad_alignment: bool,
+    // force timestamp regeneration and normalisation
+    pub fix_timestamps: bool,
     // encode audio instead of copying it
     pub transcode_audio: bool,
     // encode video instead of copying it
@@ -57,6 +67,13 @@ pub fn classify(stderr: &str, audio_codecs: &[String]) -> FailureKind {
 
     if let Some(kind) = muxer_rejection(&stderr, audio_codecs) {
         return kind;
+    }
+
+    if alignment_failure(&stderr) {
+        return FailureKind::Alignment;
+    }
+    if timestamp_failure(&stderr) {
+        return FailureKind::Timestamps;
     }
 
     const ENCODER_MARKERS: [&str; 6] = [
@@ -126,6 +143,39 @@ pub fn classify(stderr: &str, audio_codecs: &[String]) -> FailureKind {
     FailureKind::Fatal
 }
 
+// failures during probing
+pub fn classify_probe(stderr: &str) -> FailureKind {
+    let stderr = stderr.to_ascii_lowercase();
+
+    // "Could not find codec parameters for stream 0 ..." followed by
+    // "Consider increasing the value for the 'analyzeduration' and 'probesize' options"
+    if stderr.contains("could not find codec parameters")
+        || stderr.contains("consider increasing the value for the 'analyzeduration'")
+        || stderr.contains("could not determine codec type")
+    {
+        return FailureKind::Probe;
+    }
+
+    FailureKind::Fatal
+}
+
+fn alignment_failure(stderr: &str) -> bool {
+    // "width not divisible by 2 (641x361)" / "height not divisible by 2"
+    stderr.contains("not divisible by 2")
+        || stderr.contains("not divisible by 4")
+        || stderr.contains("width not divisible")
+        || stderr.contains("height not divisible")
+}
+
+fn timestamp_failure(stderr: &str) -> bool {
+    // "Application provided invalid, non monotonically increasing dts to muxer"
+    // "Can't write packet with unknown timestamp"
+    stderr.contains("non monotonically increasing dts")
+        || stderr.contains("unknown timestamp")
+        || stderr.contains("has no timestamps")
+        || stderr.contains("invalid dts")
+}
+
 fn muxer_rejection(stderr: &str, audio_codecs: &[String]) -> Option<FailureKind> {
     // "audio codec %s not compatible with flv" / "video codec %s not compatible with flv"
     if stderr.contains("not compatible with flv") {
@@ -193,6 +243,12 @@ pub enum RetryAction {
     Software,
     // keep the encoder but decode in software
     SoftwareDecode,
+    // pad odd dimensions to the encoder's alignment
+    PadAlignment,
+    // regenerate and normalise timestamps
+    FixTimestamps,
+    // re-probe with a larger probesize/analyzeduration
+    DeeperProbe,
     // stop copying audio and encode it
     TranscodeAudio,
     // stop copying video and encode it
@@ -234,6 +290,11 @@ pub fn next_action(
         }
         FailureKind::Decode if hardware => Some(RetryAction::Software),
         FailureKind::Decode => None,
+        FailureKind::Alignment if !applied.pad_alignment => Some(RetryAction::PadAlignment),
+        FailureKind::Alignment => None,
+        FailureKind::Timestamps if !applied.fix_timestamps => Some(RetryAction::FixTimestamps),
+        FailureKind::Timestamps => None,
+        FailureKind::Probe => Some(RetryAction::DeeperProbe),
         // each copy failure only gets one retry
         FailureKind::AudioCopy if !applied.transcode_audio => Some(RetryAction::TranscodeAudio),
         FailureKind::AudioCopy => None,

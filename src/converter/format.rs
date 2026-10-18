@@ -52,10 +52,12 @@ pub enum ConverterFormat {
 }
 
 impl ConverterFormat {
-    pub fn input_format_args(&self) -> &'static [&'static str] {
-        match self {
-            Self::MediaSequence => &[],
-            _ => &["-fflags", "+genpts"],
+    pub fn input_args(&self, fix_timestamps: bool) -> &'static [&'static str] {
+        match (self, fix_timestamps) {
+            (Self::MediaSequence, false) => &[],
+            (Self::MediaSequence, true) => &["-fflags", "+igndts"],
+            (_, false) => &["-fflags", "+genpts"],
+            (_, true) => &["-fflags", "+genpts+igndts"],
         }
     }
 
@@ -272,7 +274,7 @@ impl Conversion {
 
         // scale to 160:-2 if width is less than 160
         if width < 160 {
-            args.extend(["-vf".to_string(), "scale=160:-2".to_string()]);
+            Self::append_video_filter(&mut args, "scale=160:-2");
         }
 
         args.extend(["-strict".to_string(), "experimental".to_string()]);
@@ -713,6 +715,10 @@ impl Conversion {
                 "job {} has no usable audio track, or has malformed metadata",
                 job.id
             );
+        }
+
+        if overrides.pad_alignment && !remux {
+            Self::append_video_filter(&mut result, "pad=ceil(iw/2)*2:ceil(ih/2)*2");
         }
 
         if overrides.sw_decode {

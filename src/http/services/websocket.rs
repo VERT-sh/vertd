@@ -105,6 +105,7 @@ struct RetryState {
     gpu: ConverterGPU,
     allow_cpu: bool,
     failed_encoder: String,
+    probe_attempts: u8,
     // every recovery applied so far to know which ones were applied
     applied: RetryOverrides,
 }
@@ -112,6 +113,7 @@ struct RetryState {
 struct RetryPlan {
     gpu: ConverterGPU,
     overrides: RetryOverrides,
+    action: fallback::RetryAction,
     label: String,
 }
 
@@ -136,6 +138,7 @@ impl RetryState {
             gpu,
             allow_cpu,
             failed_encoder: String::new(),
+            probe_attempts: 0,
             applied: RetryOverrides::default(),
         }
     }
@@ -153,7 +156,7 @@ impl RetryState {
     }
 
     fn plan(&mut self, kind: FailureKind) -> Option<RetryPlan> {
-        use fallback::{next_action, RetryAction};
+        use fallback::RetryAction;
 
         if self.exhausted() {
             log::error!(
@@ -164,7 +167,7 @@ impl RetryState {
             return None;
         }
 
-        let action = next_action(
+        let action = fallback::next_action(
             kind,
             &self.failed_encoder,
             &self.input_pix_fmt,
@@ -194,6 +197,18 @@ impl RetryState {
                 overrides.sw_decode = true;
                 "software decoding".to_string()
             }
+            RetryAction::PadAlignment => {
+                overrides.pad_alignment = true;
+                "padded to alignment".to_string()
+            }
+            RetryAction::FixTimestamps => {
+                overrides.fix_timestamps = true;
+                "timestamp repair".to_string()
+            }
+            RetryAction::DeeperProbe => {
+                self.probe_attempts += 1;
+                format!("deeper probe ({})", self.probe_attempts)
+            }
             RetryAction::TranscodeAudio => {
                 overrides.transcode_audio = true;
                 "audio transcode".to_string()
@@ -207,6 +222,7 @@ impl RetryState {
         Some(RetryPlan {
             gpu,
             overrides,
+            action,
             label,
         })
     }
@@ -220,6 +236,15 @@ impl RetryState {
         });
     }
 
+    fn plan_for(&mut self, kind: FailureKind) -> Option<RetryPlan> {
+        self.plan(kind)
+    }
+
+    fn record_plan(&mut self, plan: RetryPlan) {
+        log::warn!("retrying job {} with {}", self.job_id, plan.label);
+        self.record(plan, crate::converter::job::new_log_buffer());
+    }
+
     async fn start_next(
         &mut self,
         converter: &Converter,
@@ -231,11 +256,31 @@ impl RetryState {
     )> {
         let stderr = format_job_logs(&snapshot_logs(self.current_logs()).await);
         let kind = fallback::classify(&stderr, &self.audio_codecs);
+        self.start_for(kind, converter, job, vaapi_device_path)
+            .await
+    }
+
+    async fn start_for(
+        &mut self,
+        kind: FailureKind,
+        converter: &Converter,
+        job: &mut Job,
+        vaapi_device_path: Option<&str>,
+    ) -> Option<(
+        tokio::sync::mpsc::Receiver<ProgressUpdate>,
+        tokio::process::Child,
+    )> {
         // which encoder failed decides which formats are worth trying
+        let stderr = format_job_logs(&snapshot_logs(self.current_logs()).await);
         if let Some(encoder) = fallback::detect_encoder(&stderr) {
             self.failed_encoder = encoder.to_string();
         }
         let plan = self.plan(kind)?;
+
+        if matches!(plan.action, fallback::RetryAction::DeeperProbe) {
+            job.widen_probe();
+        }
+
         log::warn!(
             "retrying job {} with {} after {}",
             job.id,
@@ -295,6 +340,9 @@ fn kind_label(kind: FailureKind) -> &'static str {
         FailureKind::PixelFormat => "a pixel format mismatch",
         FailureKind::Encoder => "an unsupported encoder",
         FailureKind::Decode => "a hardware decoding failure",
+        FailureKind::Alignment => "an odd resolution size",
+        FailureKind::Timestamps => "broken timestamps",
+        FailureKind::Probe => "incomplete metadata",
         FailureKind::AudioCopy => "an audio stream the muxer rejected",
         FailureKind::VideoCopy => "a video stream the muxer rejected",
         FailureKind::Fatal => "an unrecoverable error",
@@ -533,98 +581,161 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                 }
                 job.to = Some(to.to_string());
 
-                let (convert_result, setup_cancelled) = {
-                    let setup = converter.convert(&mut job, &gpu, vaapi_device_path.as_deref());
-                    tokio::pin!(setup);
-                    let mut cancelled = false;
-                    let result = loop {
-                        tokio::select! {
-                            result = &mut setup => break Some(result),
-                            message = stream.next() => {
-                                match &message {
-                                    Some(Ok(AggregatedMessage::Text(text))) => {
-                                        if let Ok(Message::CancelJob { token: cancel_token, job_id: cancel_id }) =
-                                            serde_json::from_str::<Message>(text)
-                                        {
-                                            if cancel_token == token && cancel_id == job_id {
-                                                cancelled = true;
-                                                break None;
+                let allow_cpu = env::var("ALLOW_CPU_FALLBACK")
+                    .unwrap_or_else(|_| "true".to_string())
+                    != "false";
+
+                // do a retry of the job setup with a higher probe window if it fails
+                let mut setup_retry = RetryState::new(
+                    job_id,
+                    crate::converter::job::new_log_buffer(),
+                    job.pix_fmt().await.unwrap_or_default(),
+                    job.audio_streams()
+                        .await
+                        .map(|streams| {
+                            streams
+                                .into_iter()
+                                .map(|stream| stream.codec_name)
+                                .collect::<Vec<String>>()
+                        })
+                        .unwrap_or_default(),
+                    gpu,
+                    allow_cpu,
+                );
+
+                let setup_result = 'setup: loop {
+                    let (convert_result, setup_cancelled) = {
+                        let setup = converter.convert(&mut job, &gpu, vaapi_device_path.as_deref());
+                        tokio::pin!(setup);
+                        let mut cancelled = false;
+                        let result = loop {
+                            tokio::select! {
+                                result = &mut setup => break Some(result),
+                                message = stream.next() => {
+                                    match &message {
+                                        Some(Ok(AggregatedMessage::Text(text))) => {
+                                            if let Ok(Message::CancelJob { token: cancel_token, job_id: cancel_id }) =
+                                                serde_json::from_str::<Message>(text)
+                                            {
+                                                if cancel_token == token && cancel_id == job_id {
+                                                    cancelled = true;
+                                                    break None;
+                                                }
                                             }
                                         }
+                                        Some(Ok(_)) => {} // ignore non-text/control frames during setup
+                                        _ => break None, // disconnected/errored
                                     }
-                                    Some(Ok(_)) => {} // ignore non-text/control frames during setup
-                                    _ => break None, // disconnected/errored
                                 }
                             }
-                        }
+                        };
+                        (result, cancelled)
                     };
-                    (result, cancelled)
+
+                    let Some(result) = convert_result else {
+                        // cancelled or disconnected during setup, clean up and stop
+                        APP_STATE.lock().await.jobs.remove(&job_id);
+                        if let Err(e) = remove_job_input(&job).await {
+                            if e.kind() != ErrorKind::NotFound {
+                                log::error!(
+                                    "failed to remove input after setup cancellation: {}",
+                                    e
+                                );
+                            }
+                        }
+                        if setup_cancelled {
+                            let _ = send_ws_message(&mut session, Message::JobCancelled { job_id })
+                                .await;
+                        }
+                        break None;
+                    };
+
+                    match result {
+                        Ok(started) => break Some(started),
+                        Err(e) => {
+                            let message = e.to_string();
+                            push_log(setup_retry.current_logs(), message.clone(), 1).await;
+                            let kind = fallback::classify_probe(&message);
+
+                            // keep retrying only while it looks recoverable
+                            let can_retry = kind != FailureKind::Fatal && job.can_widen_probe();
+                            if !can_retry {
+                                if let Some(job) = APP_STATE.lock().await.jobs.get_mut(&job_id) {
+                                    job.state = JobState::Failed;
+                                }
+                                let output_path = format!("output/{}.{}", job_id, to);
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(OUTPUT_LIFETIME).await;
+                                    APP_STATE.lock().await.jobs.remove(&job_id);
+                                    if let Err(e) = fs::remove_file(&output_path).await {
+                                        if e.kind() != ErrorKind::NotFound {
+                                            log::error!(
+                                                "failed to remove setup-failure output {}: {}",
+                                                output_path,
+                                                e
+                                            );
+                                        }
+                                    }
+                                });
+
+                                // also report job setup failures to the discord webhook
+                                log::error!(
+                                    "job {} failed during setup after {} probe attempt(s): {e:#}",
+                                    job_id,
+                                    job.probe_attempts()
+                                );
+                                let error_message = if setup_retry.retries() > 0 {
+                                    format!(
+                                        "failed to convert: {e:#}\n\n{}",
+                                        attempt_report(&setup_retry.attempts).await
+                                    )
+                                } else {
+                                    format!("failed to convert: {e:#}")
+                                };
+
+                                try_send_ws_message(
+                                    &mut session,
+                                    Message::Error {
+                                        message: error_message.clone(),
+                                    },
+                                )
+                                .await;
+
+                                let from = job.from.clone();
+                                let to = to.to_string();
+                                tokio::spawn(async move {
+                                    if let Err(e) =
+                                        handle_job_failure(job_id, from, to, error_message).await
+                                    {
+                                        log::error!("failed to handle job failure: {e:#}");
+                                    }
+                                });
+
+                                break None;
+                            }
+
+                            // re-probe with a wider probe window and rerun job setup
+                            match setup_retry.plan_for(kind) {
+                                Some(plan) => {
+                                    job.widen_probe();
+                                    setup_retry.record_plan(plan);
+                                    try_send_ws_message(
+                                        &mut session,
+                                        Message::JobRetried { job_id },
+                                    )
+                                    .await;
+                                    continue 'setup;
+                                }
+                                None => break None,
+                            }
+                        }
+                    }
                 };
 
-                if convert_result.is_none() {
-                    // cancelled / disconnected during setup, clean up
-                    APP_STATE.lock().await.jobs.remove(&job_id);
-                    if let Err(e) = remove_job_input(&job).await {
-                        if e.kind() != ErrorKind::NotFound {
-                            log::error!("failed to remove input after setup cancellation: {}", e);
-                        }
-                    }
-                    if setup_cancelled {
-                        let _ =
-                            send_ws_message(&mut session, Message::JobCancelled { job_id }).await;
-                    }
+                let Some((mut rx, process, original_logs)) = setup_result else {
+                    // setup was cancelled, failed unrecoverably, or retries ran out, earlier code reports what happened
                     continue;
-                }
-
-                let (mut rx, process, original_logs) =
-                    match convert_result.expect("setup result set when not cancelled") {
-                        Ok((rx, process, log_buffer)) => (rx, process, log_buffer),
-                        Err(e) => {
-                            // remove job if somehow job never was able to start
-                            if let Some(job) = APP_STATE.lock().await.jobs.get_mut(&job_id) {
-                                job.state = JobState::Failed;
-                            }
-                            let output_path = format!("output/{}.{}", job_id, to);
-                            tokio::spawn(async move {
-                                tokio::time::sleep(OUTPUT_LIFETIME).await;
-                                APP_STATE.lock().await.jobs.remove(&job_id);
-                                if let Err(e) = fs::remove_file(&output_path).await {
-                                    if e.kind() != ErrorKind::NotFound {
-                                        log::error!(
-                                            "failed to remove setup-failure output {}: {}",
-                                            output_path,
-                                            e
-                                        );
-                                    }
-                                }
-                            });
-
-                            // report job setup (ffprobe) failures to discord webhook as well
-                            log::error!("job {} failed during setup: {e:#}", job_id);
-                            let error_message = format!("failed to convert: {e:#}");
-
-                            try_send_ws_message(
-                                &mut session,
-                                Message::Error {
-                                    message: error_message.clone(),
-                                },
-                            )
-                            .await;
-
-                            let from = job.from.clone();
-                            let to = to.to_string();
-
-                            tokio::spawn(async move {
-                                if let Err(e) =
-                                    handle_job_failure(job_id, from, to, error_message).await
-                                {
-                                    log::error!("failed to handle job failure: {e:#}");
-                                }
-                            });
-
-                            continue;
-                        }
-                    };
+                };
 
                 let input_pix_fmt = job.pix_fmt().await.unwrap_or_default();
                 let audio_codecs = job
@@ -643,8 +754,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     input_pix_fmt,
                     audio_codecs,
                     gpu,
-                    env::var("ALLOW_CPU_FALLBACK").unwrap_or_else(|_| "true".to_string())
-                        != "false",
+                    allow_cpu,
                 );
                 let mut job_cancelled = false;
                 let mut process_opt = Some(process);
@@ -864,7 +974,8 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     let expects_video = !matches!(
                         to,
                         ConverterFormat::GIF | ConverterFormat::WEBP | ConverterFormat::APNG
-                    ) && job.sequence_kind() != Some(SequenceKind::FrameSequence);
+                    ) && job.sequence_kind()
+                        != Some(SequenceKind::FrameSequence);
                     let missing_video = !is_empty
                         && expects_video
                         && !has_video_stream(&output_path).await.unwrap_or(true);
@@ -886,10 +997,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         {
                             rx = new_rx;
                             process_opt = Some(new_process);
-                            if !send_ws_message(&mut session, Message::JobRetried { job_id }).await
-                            {
-                                break 'conversion;
-                            }
+                            try_send_ws_message(&mut session, Message::JobRetried { job_id }).await;
                             continue 'conversion;
                         }
 
