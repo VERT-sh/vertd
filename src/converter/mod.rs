@@ -160,16 +160,21 @@ impl Converter {
         tokio::process::Child,
         job::LogBuffer,
     )> {
-        self.convert_with_pix_fmt(job, gpu, vaapi_device_path, None)
-            .await
+        self.convert_with_overrides(
+            job,
+            gpu,
+            vaapi_device_path,
+            fallback::RetryOverrides::default(),
+        )
+        .await
     }
 
-    pub async fn convert_with_pix_fmt(
+    pub async fn convert_with_overrides(
         &self,
         job: &mut Job,
         gpu: &gpu::ConverterGPU,
         vaapi_device_path: Option<&str>,
-        forced_pix_fmt: Option<&str>,
+        overrides: fallback::RetryOverrides,
     ) -> anyhow::Result<(
         mpsc::Receiver<ProgressUpdate>,
         tokio::process::Child,
@@ -225,7 +230,7 @@ impl Converter {
             let app_state = crate::state::APP_STATE.lock().await;
             app_state.supported_accelerated_codecs.clone()
         };
-        let args = self
+        let (args, video_encoder) = self
             .conversion
             .to_args(
                 &self.speed,
@@ -236,12 +241,12 @@ impl Converter {
                 &supported_accelerated_codecs,
                 job,
                 &self.settings,
-                forced_pix_fmt,
+                overrides,
             )
             .await?;
         let args = args.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
         let args = args.as_slice();
-        let gpu_args = gpu.hwaccel_args(vaapi_device_path);
+        let gpu_args = gpu.hwaccel_args(vaapi_device_path, overrides.sw_decode, &video_encoder);
         let gpu_args_refs: Vec<&str> = gpu_args.iter().map(|s| s.as_str()).collect();
 
         let metadata_args: &[&str] = if self.settings.metadata {
@@ -273,23 +278,6 @@ impl Converter {
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
-
-        // if video is more than 4k on nvenc, remove -hwaccel cuda to avoid "Video width 7680 not within range from 48 to 4096"
-        // error from the h264_nvenc *decoder*, guh
-        let command = if matches!(gpu, gpu::ConverterGPU::NVIDIA) {
-            let (width, height) = job.resolution().await?;
-            if width > 3840 || height > 2160 {
-                command
-                    .iter()
-                    .filter(|s| *s != "-hwaccel" && *s != "cuda")
-                    .cloned()
-                    .collect()
-            } else {
-                command
-            }
-        } else {
-            command
-        };
 
         info!("running 'ffmpeg {}'", command.join(" "));
 

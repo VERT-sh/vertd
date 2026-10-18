@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::{
     converter::{
-        fallback::FailureKind,
+        fallback::{self, FailureKind, RetryOverrides},
         format::ConverterFormat,
         gpu::ConverterGPU,
         job::{format_job_logs, push_log, snapshot_logs, Job, JobState, LogBuffer, ProgressUpdate},
@@ -86,32 +86,47 @@ struct Attempt {
 }
 
 struct RetryState {
+    job_id: Uuid,
     attempts: Vec<Attempt>,
     attempted_pix_fmts: Vec<String>,
     input_pix_fmt: String,
+    // codec names of the job's audio streams, used to tell which stream the muxer rejected
+    audio_codecs: Vec<String>,
     gpu: ConverterGPU,
     allow_cpu: bool,
     failed_encoder: String,
+    // every recovery applied so far to know which ones were applied
+    applied: RetryOverrides,
 }
 
 struct RetryPlan {
     gpu: ConverterGPU,
-    pix_fmt: Option<&'static str>,
+    overrides: RetryOverrides,
     label: String,
 }
 
 impl RetryState {
-    fn new(logs: LogBuffer, input_pix_fmt: String, gpu: ConverterGPU, allow_cpu: bool) -> Self {
+    fn new(
+        job_id: Uuid,
+        logs: LogBuffer,
+        input_pix_fmt: String,
+        audio_codecs: Vec<String>,
+        gpu: ConverterGPU,
+        allow_cpu: bool,
+    ) -> Self {
         Self {
+            job_id,
             attempts: vec![Attempt {
                 label: "initial".to_string(),
                 logs,
             }],
             attempted_pix_fmts: Vec::new(),
             input_pix_fmt,
+            audio_codecs,
             gpu,
             allow_cpu,
             failed_encoder: String::new(),
+            applied: RetryOverrides::default(),
         }
     }
 
@@ -123,35 +138,72 @@ impl RetryState {
         self.attempts.len() - 1
     }
 
-    fn plan(&mut self, kind: FailureKind) -> Option<RetryPlan> {
-        use crate::converter::fallback::{next_action, RetryAction};
+    fn exhausted(&self) -> bool {
+        self.retries() >= fallback::MAX_ATTEMPTS
+    }
 
-        match next_action(
+    fn plan(&mut self, kind: FailureKind) -> Option<RetryPlan> {
+        use fallback::{next_action, RetryAction};
+
+        if self.exhausted() {
+            log::error!(
+                "giving up on job {} after {} attempts",
+                self.job_id,
+                self.retries()
+            );
+            return None;
+        }
+
+        let action = next_action(
             kind,
             &self.failed_encoder,
             &self.input_pix_fmt,
             &self.attempted_pix_fmts,
-            self.gpu != ConverterGPU::CPU,
-        )? {
+            self.gpu,
+            self.applied,
+        )?;
+
+        let mut overrides = self.applied;
+        let mut gpu = self.gpu;
+        let label = match action {
             RetryAction::PixFmt(pix_fmt) => {
                 self.attempted_pix_fmts.push(pix_fmt.to_string());
-                Some(RetryPlan {
-                    gpu: self.gpu,
-                    pix_fmt: Some(pix_fmt),
-                    label: format!("pix_fmt={pix_fmt}"),
-                })
+                overrides.pix_fmt = Some(pix_fmt);
+                format!("pix_fmt={pix_fmt}")
             }
-            RetryAction::Software if self.allow_cpu => Some(RetryPlan {
-                gpu: ConverterGPU::CPU,
-                pix_fmt: None,
-                label: "software".to_string(),
-            }),
-            RetryAction::Software => None,
-        }
+            RetryAction::Software => {
+                if !self.allow_cpu {
+                    return None;
+                }
+                gpu = ConverterGPU::CPU;
+                overrides.pix_fmt = None;
+                overrides.sw_decode = false;
+                "software".to_string()
+            }
+            RetryAction::SoftwareDecode => {
+                overrides.sw_decode = true;
+                "software decoding".to_string()
+            }
+            RetryAction::TranscodeAudio => {
+                overrides.transcode_audio = true;
+                "audio transcode".to_string()
+            }
+            RetryAction::TranscodeVideo => {
+                overrides.transcode_video = true;
+                "video transcode".to_string()
+            }
+        };
+
+        Some(RetryPlan {
+            gpu,
+            overrides,
+            label,
+        })
     }
 
     fn record(&mut self, plan: RetryPlan, logs: LogBuffer) {
         self.gpu = plan.gpu;
+        self.applied = plan.overrides;
         self.attempts.push(Attempt {
             label: plan.label,
             logs,
@@ -168,9 +220,9 @@ impl RetryState {
         tokio::process::Child,
     )> {
         let stderr = format_job_logs(&snapshot_logs(self.current_logs()).await);
-        let kind = crate::converter::fallback::classify(&stderr);
+        let kind = fallback::classify(&stderr, &self.audio_codecs);
         // which encoder failed decides which formats are worth trying
-        if let Some(encoder) = crate::converter::fallback::detect_encoder(&stderr) {
+        if let Some(encoder) = fallback::detect_encoder(&stderr) {
             self.failed_encoder = encoder.to_string();
         }
         let plan = self.plan(kind)?;
@@ -182,7 +234,7 @@ impl RetryState {
         );
 
         match converter
-            .convert_with_pix_fmt(job, &plan.gpu, vaapi_device_path, plan.pix_fmt)
+            .convert_with_overrides(job, &plan.gpu, vaapi_device_path, plan.overrides)
             .await
         {
             Ok((rx, process, logs)) => {
@@ -232,6 +284,9 @@ fn kind_label(kind: FailureKind) -> &'static str {
     match kind {
         FailureKind::PixelFormat => "a pixel format mismatch",
         FailureKind::Encoder => "an unsupported encoder",
+        FailureKind::Decode => "a hardware decoding failure",
+        FailureKind::AudioCopy => "an audio stream the muxer rejected",
+        FailureKind::VideoCopy => "a video stream the muxer rejected",
         FailureKind::Fatal => "an unrecoverable error",
     }
 }
@@ -549,9 +604,21 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     };
 
                 let input_pix_fmt = job.pix_fmt().await.unwrap_or_default();
+                let audio_codecs = job
+                    .audio_streams()
+                    .await
+                    .map(|streams| {
+                        streams
+                            .into_iter()
+                            .map(|stream| stream.codec_name)
+                            .collect::<Vec<String>>()
+                    })
+                    .unwrap_or_default();
                 let mut retry = RetryState::new(
+                    job_id,
                     original_logs,
                     input_pix_fmt,
+                    audio_codecs,
                     gpu,
                     env::var("ALLOW_CPU_FALLBACK").unwrap_or_else(|_| "true".to_string())
                         != "false",

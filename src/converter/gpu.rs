@@ -122,10 +122,44 @@ impl ConverterGPU {
         }
     }
 
+    pub fn supports_software_decode(&self) -> bool {
+        !matches!(self, Self::CPU)
+    }
+
+    pub fn hwupload_filter(&self, encoder: &str, pix_fmt: &str) -> Option<&'static str> {
+        if !encoder.ends_with("_vaapi") {
+            return None;
+        }
+
+        Some(if crate::converter::pixfmt::is_high_bit_depth(pix_fmt) {
+            "format=p010,hwupload"
+        } else {
+            "format=nv12,hwupload"
+        })
+    }
+
     #[allow(unused_variables)]
-    pub fn hwaccel_args(&self, vaapi_device_path: Option<&str>) -> Vec<String> {
+    pub fn hwaccel_args(
+        &self,
+        vaapi_device_path: Option<&str>,
+        software_decode: bool,
+        encoder: &str,
+    ) -> Vec<String> {
         // CPU mode doesn't use hardware acceleration
         if matches!(self, ConverterGPU::CPU) {
+            return vec![];
+        }
+
+        if software_decode {
+            #[cfg(target_os = "linux")]
+            {
+                if encoder.ends_with("_vaapi") {
+                    let device_path = vaapi_device_path.unwrap_or("/dev/dri/renderD128");
+                    return vec!["-vaapi_device".to_string(), device_path.to_string()];
+                }
+            }
+
+            // nvenc, videotoolbox, qsv and amf all can encode from system memory
             return vec![];
         }
 

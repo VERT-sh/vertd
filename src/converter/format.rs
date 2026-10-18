@@ -1,8 +1,8 @@
 use crate::converter::job::Job;
 
 use super::{
-    codecs, constraint::FormatConstraint, gpu::ConverterGPU, pixfmt, speed::ConversionSpeed,
-    ConversionSettings,
+    codecs, constraint::FormatConstraint, fallback::RetryOverrides, gpu::ConverterGPU, pixfmt,
+    speed::ConversionSpeed, ConversionSettings,
 };
 use log::{info, warn};
 use strum_macros::{Display, EnumIter, EnumString};
@@ -290,8 +290,8 @@ impl Conversion {
         supported_accelerated_codecs: &[String],
         job: &super::job::Job,
         settings: &ConversionSettings,
-        forced_pix_fmt: Option<&str>,
-    ) -> anyhow::Result<Vec<String>> {
+        overrides: RetryOverrides,
+    ) -> anyhow::Result<(Vec<String>, String)> {
         settings.validate()?;
         let audio_codec = Self::custom_value(&settings.audio_codec)
             .or_else(|| self.preferred_audio_encoder())
@@ -385,6 +385,7 @@ impl Conversion {
         let can_remux_video = supports_remux
             && !matches!(self.to, ConverterFormat::MXF)
             && !requires_video_encoding
+            && !overrides.transcode_video
             && !flatten_alpha
             && codecs::support_video_codec(self.from, &input_video_codec)
             && codecs::support_video_codec(self.to, &input_video_codec);
@@ -432,7 +433,7 @@ impl Conversion {
                             fps,
                             supported_accelerated_codecs,
                             job,
-                            forced_pix_fmt,
+                            overrides.pix_fmt,
                         )
                         .await?
                     } else {
@@ -600,7 +601,7 @@ impl Conversion {
 
         if !remux && video_encoder != "copy" && !result.contains(&"-pix_fmt".to_string()) {
             if let Some(pix_fmt) =
-                Self::pix_fmt_override(&video_encoder, &input_pix_fmt, forced_pix_fmt)
+                Self::pix_fmt_override(&video_encoder, &input_pix_fmt, overrides.pix_fmt)
             {
                 result.extend(["-pix_fmt".to_string(), pix_fmt.to_string()]);
             }
@@ -628,6 +629,7 @@ impl Conversion {
 
                 // copy if possible, else encode
                 let copy = !requires_audio_encoding
+                    && !overrides.transcode_audio
                     && codecs::support_audio_codec(self.to, &stream.codec_name.to_lowercase());
                 let encoder = if copy { "copy" } else { &audio_codec };
                 anyhow::ensure!(!encoder.is_empty(), "no audio encoder for {}", self.to);
@@ -713,7 +715,18 @@ impl Conversion {
             );
         }
 
-        Ok(result)
+        if overrides.sw_decode {
+            let effective_pix_fmt = result
+                .windows(2)
+                .rev()
+                .find(|args| args[0] == "-pix_fmt")
+                .map_or(input_pix_fmt.as_str(), |args| args[1].as_str());
+            if let Some(upload) = gpu.hwupload_filter(&video_encoder, effective_pix_fmt) {
+                Self::append_video_filter(&mut result, upload);
+            }
+        }
+
+        Ok((result, video_encoder))
     }
 
     async fn remux_args(

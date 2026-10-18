@@ -257,6 +257,8 @@ The environment variable `MAX_UPLOAD_BYTES` can be set in your `.env` or in the 
 When a conversion fails for any reason, some failures may be recoverable so `vertd` retries before giving up. Currently it tries these fallback paths:
 
 1. **Pixel format** - if the encoder refuses the format, `vertd` retries with progressively simpler formats (e.g. `yuv422p10le` > `yuv422p` > `p010le` > `yuv420p`).
-2. **Software encoding** - if every pixel format fails, or the encoder cannot handle the job at all (unsupported codec, resolution out of range, etc), `vertd` retries with the CPU if allowed.
+2. **Software decoding** - if the hardware decoder cannot handle the input, `vertd` decodes on the CPU while still encoding on the GPU.
+3. **Stream encoding** - if the container rejects a video / audio stream `vertd` tried to copy (remuxing), it re-encodes said stream.
+4. **Software encoding** - if every pixel format fails, or the encoder cannot handle the job at all (unsupported codec, resolution out of range, etc), `vertd` retries with the CPU if allowed.
 
 If these do not work then `vertd` gives up, usually due to corrupted input files or full disks.
