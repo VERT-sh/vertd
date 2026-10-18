@@ -122,6 +122,32 @@ impl ConverterGPU {
         }
     }
 
+    pub const HW_ENCODER_SUFFIXES: &'static [&'static str] =
+        &["nvenc", "videotoolbox", "vaapi", "qsv", "amf"];
+
+    pub const SW_ENCODERS: &'static [&'static str] = &[
+        "libx264",
+        "libx265",
+        "libsvtav1",
+        "libvpx-vp9",
+        "libvpx",
+        "libaom-av1",
+        "prores_ks",
+        "libwebp",
+    ];
+
+    // every encoder name a retry might need to recognise in ffmpeg's stderr
+    pub fn known_encoders() -> Vec<String> {
+        let mut encoders = Vec::new();
+        for suffix in Self::HW_ENCODER_SUFFIXES {
+            for codec in ["h264", "hevc", "av1", "vp9", "vp8", "mpeg2", "mpeg4"] {
+                encoders.push(format!("{codec}_{suffix}"));
+            }
+        }
+        encoders.extend(Self::SW_ENCODERS.iter().map(|name| (*name).to_string()));
+        encoders
+    }
+
     pub fn supports_software_decode(&self) -> bool {
         !matches!(self, Self::CPU)
     }

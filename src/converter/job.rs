@@ -432,25 +432,12 @@ impl Job {
         }
 
         let duration_secs = self.video_metadata().await?.duration_secs;
+        let fps = self.fps().await?;
         let total_frames = duration_secs
-            .map(|duration| (duration * f64::from(self.fps_hint())).round() as u64)
+            .map(|duration| (duration * f64::from(fps)).round() as u64)
             .unwrap_or(0);
         self.total_frames = Some(total_frames);
         Ok(total_frames)
-    }
-
-    fn fps_hint(&self) -> u32 {
-        self.video
-            .get()
-            .and_then(|metadata| {
-                metadata
-                    .streams
-                    .iter()
-                    .find(|probe| !probe.is_attached_picture())
-                    .or_else(|| metadata.streams.first())
-            })
-            .and_then(|probe| parse_fps(&probe.r_frame_rate))
-            .unwrap_or(30)
     }
 
     pub async fn fps(&mut self) -> anyhow::Result<u32> {

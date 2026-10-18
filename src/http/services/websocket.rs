@@ -357,6 +357,49 @@ async fn remove_job_input(job: &Job) -> std::io::Result<()> {
     }
 }
 
+async fn fail_job(
+    session: &mut actix_ws::Session,
+    job: &Job,
+    job_id: Uuid,
+    to: ConverterFormat,
+    error_message: String,
+) {
+    {
+        let mut app_state = APP_STATE.lock().await;
+        if let Some(state_job) = app_state.jobs.get_mut(&job_id) {
+            state_job.state = JobState::Failed;
+        }
+    }
+
+    let output_path = format!("output/{}.{}", job_id, to);
+    tokio::spawn(async move {
+        tokio::time::sleep(OUTPUT_LIFETIME).await;
+        APP_STATE.lock().await.jobs.remove(&job_id);
+        if let Err(e) = fs::remove_file(&output_path).await {
+            if e.kind() != ErrorKind::NotFound {
+                log::error!("failed to remove failed output {}: {}", output_path, e);
+            }
+        }
+    });
+
+    try_send_ws_message(
+        session,
+        Message::Error {
+            message: error_message.clone(),
+        },
+    )
+    .await;
+
+    // report regardless of the websocket state
+    let from = job.from.clone();
+    let to = to.to_string();
+    tokio::spawn(async move {
+        if let Err(e) = handle_job_failure(job_id, from, to, error_message).await {
+            log::error!("failed to handle job failure: {e:#}");
+        }
+    });
+}
+
 #[get("/ws")]
 pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
     let (res, mut session, stream) = actix_ws::handle(&req, stream)?;
@@ -660,24 +703,6 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                             // keep retrying only while it looks recoverable
                             let can_retry = kind != FailureKind::Fatal && job.can_widen_probe();
                             if !can_retry {
-                                if let Some(job) = APP_STATE.lock().await.jobs.get_mut(&job_id) {
-                                    job.state = JobState::Failed;
-                                }
-                                let output_path = format!("output/{}.{}", job_id, to);
-                                tokio::spawn(async move {
-                                    tokio::time::sleep(OUTPUT_LIFETIME).await;
-                                    APP_STATE.lock().await.jobs.remove(&job_id);
-                                    if let Err(e) = fs::remove_file(&output_path).await {
-                                        if e.kind() != ErrorKind::NotFound {
-                                            log::error!(
-                                                "failed to remove setup-failure output {}: {}",
-                                                output_path,
-                                                e
-                                            );
-                                        }
-                                    }
-                                });
-
                                 // also report job setup failures to the discord webhook
                                 log::error!(
                                     "job {} failed during setup after {} probe attempt(s): {e:#}",
@@ -693,24 +718,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                     format!("failed to convert: {e:#}")
                                 };
 
-                                try_send_ws_message(
-                                    &mut session,
-                                    Message::Error {
-                                        message: error_message.clone(),
-                                    },
-                                )
-                                .await;
-
-                                let from = job.from.clone();
-                                let to = to.to_string();
-                                tokio::spawn(async move {
-                                    if let Err(e) =
-                                        handle_job_failure(job_id, from, to, error_message).await
-                                    {
-                                        log::error!("failed to handle job failure: {e:#}");
-                                    }
-                                });
-
+                                fail_job(&mut session, &job, job_id, to, error_message).await;
                                 break None;
                             }
 
@@ -1003,13 +1011,6 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
 
                         // nothing left to try, finally give up </3
                         let retries = retry.retries();
-
-                        // hacky :/
-                        let mut app_state = APP_STATE.lock().await;
-                        if let Some(job) = app_state.jobs.get_mut(&job_id) {
-                            job.state = JobState::Failed;
-                        }
-                        drop(app_state);
                         log::error!(
                             "job {} failed after {} retr{}",
                             job_id,
@@ -1018,25 +1019,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         );
 
                         let error_message = attempt_report(&retry.attempts).await;
-
-                        try_send_ws_message(
-                            &mut session,
-                            Message::Error {
-                                message: error_message.clone(),
-                            },
-                        )
-                        .await;
-
-                        let from = job.from.clone();
-                        let to = to.to_string().to_string();
-
-                        tokio::spawn(async move {
-                            if let Err(e) =
-                                handle_job_failure(job_id, from, to, error_message.clone()).await
-                            {
-                                log::error!("failed to handle job failure: {e:#}");
-                            }
-                        });
+                        fail_job(&mut session, &job, job_id, to, error_message).await;
                     } else {
                         if let Some(job) = APP_STATE.lock().await.jobs.get_mut(&job_id) {
                             job.state = JobState::Completed;

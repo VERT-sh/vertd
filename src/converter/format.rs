@@ -77,7 +77,14 @@ impl ConverterFormat {
     fn supports_single_video_stream(&self) -> bool {
         matches!(
             self,
-            Self::GIF | Self::AMV | Self::SWF | Self::H264 | Self::WEBP | Self::APNG
+            Self::GIF
+                | Self::AMV
+                | Self::SWF
+                | Self::H264
+                | Self::WEBP
+                | Self::APNG
+                | Self::IVF
+                | Self::GXF
         )
     }
 }
@@ -85,6 +92,19 @@ impl ConverterFormat {
 pub struct Conversion {
     pub from: ConverterFormat,
     pub to: ConverterFormat,
+}
+
+const EVEN_DIMENSIONS_FILTER: &str = "scale=trunc(iw/2)*2:trunc(ih/2)*2";
+const PAD_ALIGNMENT_FILTER: &str = "pad=ceil(iw/2)*2:ceil(ih/2)*2";
+const STRICT_EXPERIMENTAL: [&str; 2] = ["-strict", "experimental"];
+
+fn strict_experimental() -> Vec<String> {
+    STRICT_EXPERIMENTAL.map(str::to_string).to_vec()
+}
+
+// whether a frame size would need padding/cropping to reach even dimensions
+fn needs_even_dimensions(resolution: (u32, u32)) -> bool {
+    !resolution.0.is_multiple_of(2) || !resolution.1.is_multiple_of(2)
 }
 
 impl Conversion {
@@ -162,17 +182,18 @@ impl Conversion {
         settings.iter().any(|setting| !Self::is_auto(setting))
     }
 
-    fn insert_codec_arg(args: &mut Vec<String>, flag: &str, codec: String) {
+    // set a single-value option replacing any existing one
+    fn set_arg(args: &mut Vec<String>, flag: &str, value: String) {
         if let Some(index) = args.iter().position(|arg| arg == flag) {
-            if let Some(value) = args.get_mut(index + 1) {
-                *value = codec;
+            if let Some(existing) = args.get_mut(index + 1) {
+                *existing = value;
                 return;
             }
-            args.push(codec);
+            args.push(value);
             return;
         }
 
-        args.extend([flag.to_string(), codec]);
+        args.extend([flag.to_string(), value]);
     }
 
     fn append_video_filter(args: &mut Vec<String>, filter: &str) {
@@ -269,7 +290,7 @@ impl Conversion {
         }
 
         if fps > 240 {
-            args.extend(["-r".to_string(), "240".to_string()]);
+            Self::set_arg(&mut args, "-r", "240".to_string());
         }
 
         // scale to 160:-2 if width is less than 160
@@ -277,7 +298,7 @@ impl Conversion {
             Self::append_video_filter(&mut args, "scale=160:-2");
         }
 
-        args.extend(["-strict".to_string(), "experimental".to_string()]);
+        args.extend(STRICT_EXPERIMENTAL.map(str::to_string));
 
         Ok(args)
     }
@@ -439,12 +460,12 @@ impl Conversion {
                         )
                         .await?
                     } else {
-                        vec!["-strict".to_string(), "experimental".to_string()]
+                        strict_experimental()
                     }
                 }
 
                 ConverterFormat::GIF => {
-                    vec![
+                    let mut args = vec![
                         "-filter_complex".to_string(),
                         format!(
                             "[0:v:0]fps={},scale={}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse=dither=bayer[gif]",
@@ -455,29 +476,27 @@ impl Conversion {
                         "[gif]".to_string(),
                         "-loop".to_string(),
                         "0".to_string(),
-                        "-strict".to_string(),
-                        "experimental".to_string(),
-                    ]
+                    ];
+                    args.extend(strict_experimental());
+                    args
                 }
 
-                ConverterFormat::DIVX => vec![
-                    "-f".to_string(),
-                    "avi".to_string(),
-                    "-strict".to_string(),
-                    "experimental".to_string(),
-                ],
+                ConverterFormat::DIVX => {
+                    let mut args = vec!["-f".to_string(), "avi".to_string()];
+                    args.extend(strict_experimental());
+                    args
+                }
 
-                ConverterFormat::SWF => vec![
-                    "-f".to_string(),
-                    "swf".to_string(),
-                    "-strict".to_string(),
-                    "experimental".to_string(),
-                ],
+                ConverterFormat::SWF => {
+                    let mut args = vec!["-f".to_string(), "swf".to_string()];
+                    args.extend(strict_experimental());
+                    args
+                }
 
                 // amv only supports two tracks - 1 video and 1 audio
                 // ignore extra tracks, and if no audio track, add silent audio track
                 ConverterFormat::AMV => {
-                    if !has_usable_audio {
+                    let mut args = if !has_usable_audio {
                         vec![
                             "-f".to_string(),
                             "lavfi".to_string(),
@@ -488,8 +507,6 @@ impl Conversion {
                             "-map".to_string(),
                             "1:a:0".to_string(),
                             "-shortest".to_string(),
-                            "-strict".to_string(),
-                            "experimental".to_string(),
                         ]
                     } else {
                         vec![
@@ -497,10 +514,10 @@ impl Conversion {
                             "0:v:0".to_string(),
                             "-map".to_string(),
                             "0:a:0".to_string(),
-                            "-strict".to_string(),
-                            "experimental".to_string(),
                         ]
-                    }
+                    };
+                    args.extend(strict_experimental());
+                    args
                 }
 
                 ConverterFormat::RM | ConverterFormat::RMVB => {
@@ -513,7 +530,7 @@ impl Conversion {
 
                 // probably not a good practice but lol, if it generates a bad file then it's
                 // likely the user doing some weird settings override lol
-                _ => vec!["-strict".to_string(), "experimental".to_string()],
+                _ => strict_experimental(),
             }
         };
 
@@ -543,7 +560,7 @@ impl Conversion {
                 .preferred_video_encoder(gpu, supported_accelerated_codecs)
                 .await
             {
-                Self::insert_codec_arg(&mut result, "-c:v", preferred_video_encoder);
+                Self::set_arg(&mut result, "-c:v", preferred_video_encoder);
             }
         }
 
@@ -551,7 +568,7 @@ impl Conversion {
         // custom fps
         if let Some(custom_fps) = Self::custom_value(&settings.fps) {
             if let Ok(fps_val) = custom_fps.parse::<u32>() {
-                result.extend(["-r".to_string(), fps_val.to_string()]);
+                Self::set_arg(&mut result, "-r", fps_val.to_string());
             }
         }
 
@@ -578,12 +595,12 @@ impl Conversion {
 
         // custom video codec
         if let Some(video_codec) = Self::custom_value(&settings.video_codec) {
-            Self::insert_codec_arg(&mut result, "-c:v", video_codec.to_string());
+            Self::set_arg(&mut result, "-c:v", video_codec.to_string());
         }
 
         // custom audio codec
         if let Some(audio_codec) = Self::custom_value(&settings.audio_codec) {
-            Self::insert_codec_arg(&mut result, "-c:a", audio_codec.to_string());
+            Self::set_arg(&mut result, "-c:a", audio_codec.to_string());
         }
 
         // custom sample rate
@@ -601,11 +618,11 @@ impl Conversion {
             .map(|args| args[1].clone())
             .unwrap_or_default();
 
-        if !remux && video_encoder != "copy" && !result.contains(&"-pix_fmt".to_string()) {
+        if !remux && video_encoder != "copy" {
             if let Some(pix_fmt) =
                 Self::pix_fmt_override(&video_encoder, &input_pix_fmt, overrides.pix_fmt)
             {
-                result.extend(["-pix_fmt".to_string(), pix_fmt.to_string()]);
+                Self::set_arg(&mut result, "-pix_fmt", pix_fmt.to_string());
             }
         }
         let video_bitrate = Self::custom_value(&settings.video_bitrate)
@@ -670,19 +687,11 @@ impl Conversion {
             && !remux
             && job.sequence_kind() != Some(super::sequence::SequenceKind::FrameSequence)
         {
-            if !result.contains(&"-pix_fmt".to_string()) {
-                result.extend(["-pix_fmt".to_string(), "yuv420p".to_string()]);
-            }
-            Self::append_video_filter(&mut result, "scale=trunc(iw/2)*2:trunc(ih/2)*2");
+            Self::set_arg(&mut result, "-pix_fmt", "yuv420p".to_string());
         }
 
         if job.sequence_kind() == Some(super::sequence::SequenceKind::FrameSequence) && !remux {
             let preserve_alpha = settings.image_sequence_transparency.unwrap_or(false);
-
-            // force even dimensions
-            if !result.contains(&"-filter_complex".to_string()) {
-                Self::append_video_filter(&mut result, "scale=trunc(iw/2)*2:trunc(ih/2)*2");
-            }
 
             // force pixel formats for formats that support alpha, else default to yuv420p
             let pix_fmt = match self.to {
@@ -698,7 +707,7 @@ impl Conversion {
             };
 
             if let Some(pix_fmt) = pix_fmt {
-                result.extend(["-pix_fmt".to_string(), pix_fmt.to_string()]);
+                Self::set_arg(&mut result, "-pix_fmt", pix_fmt.to_string());
             }
 
             if self.to == ConverterFormat::WebM && preserve_alpha {
@@ -710,6 +719,15 @@ impl Conversion {
             }
         }
 
+        let needs_even = (matches!(self.to, ConverterFormat::IVF | ConverterFormat::Y4M)
+            || job.sequence_kind() == Some(super::sequence::SequenceKind::FrameSequence))
+            && !remux
+            && needs_even_dimensions(resolution)
+            && !result.contains(&"-filter_complex".to_string());
+        if needs_even {
+            Self::append_video_filter(&mut result, EVEN_DIMENSIONS_FILTER);
+        }
+
         if !has_usable_audio {
             info!(
                 "job {} has no usable audio track, or has malformed metadata",
@@ -717,8 +735,9 @@ impl Conversion {
             );
         }
 
-        if overrides.pad_alignment && !remux {
-            Self::append_video_filter(&mut result, "pad=ceil(iw/2)*2:ceil(ih/2)*2");
+        // pad to even dimensions if the encoder itself rejected an odd frame size.
+        if overrides.pad_alignment && !remux && !needs_even {
+            Self::append_video_filter(&mut result, PAD_ALIGNMENT_FILTER);
         }
 
         if overrides.sw_decode {
@@ -767,7 +786,7 @@ impl Conversion {
             args.extend(["-c:v".to_string(), encoder]);
         }
 
-        args.extend(["-strict".to_string(), "experimental".to_string()]);
+        args.extend(strict_experimental());
 
         info!("performing remux for job {}", job.id);
 

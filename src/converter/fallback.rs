@@ -221,18 +221,23 @@ fn tag_rejected_codec(stderr: &str) -> Option<&str> {
     (!name.is_empty()).then_some(name)
 }
 
-// detect encoder from ffmpeg stderr
+// detect encoder ffmpeg was using when it failed
 pub fn detect_encoder(stderr: &str) -> Option<&'static str> {
-    const ENCODERS: [&str; 6] = [
-        "h264_nvenc",
-        "hevc_nvenc",
-        "av1_nvenc",
-        "libx264",
-        "libx265",
-        "libsvtav1",
-    ];
+    use crate::converter::gpu::ConverterGPU;
+
+    static ENCODERS: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+    let encoders = ENCODERS.get_or_init(|| {
+        let mut names: Vec<&'static str> = ConverterGPU::known_encoders()
+            .into_iter()
+            .map(|name| Box::leak(name.into_boxed_str()) as &'static str)
+            .collect();
+        // longest first, so a more specific name is not shadowed by its prefix (e.g. "libvpx-vp9" vs "libvpx")
+        names.sort_by_key(|name| std::cmp::Reverse(name.len()));
+        names
+    });
+
     let stderr = stderr.to_ascii_lowercase();
-    ENCODERS.into_iter().find(|name| stderr.contains(name))
+    encoders.iter().copied().find(|name| stderr.contains(name))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
