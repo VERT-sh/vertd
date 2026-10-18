@@ -102,6 +102,36 @@ fn validate_ffprobe_output(
     ))
 }
 
+pub async fn has_video_stream(path: &str) -> anyhow::Result<bool> {
+    let output = run_ffprobe(&[
+        "-v",
+        "error",
+        "-select_streams",
+        "v",
+        "-show_entries",
+        "stream=index",
+        "-of",
+        "csv=p=0",
+        path,
+    ])
+    .await?;
+
+    validate_ffprobe_output(&output, path, "checking the output for a video stream")?;
+    Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
+}
+
+// most likely pixel format for each codec, only used if ffprobe can't report one (e.g. an unparseable streams).
+fn default_pix_fmt_for_codec(codec: &str) -> &'static str {
+    match codec.to_lowercase().as_str() {
+        "h264" | "hevc" | "vp8" | "vp9" | "av1" | "mpeg2video" | "mpeg1video" | "mpeg4"
+        | "msmpeg4v3" | "msmpeg4v2" | "h263" | "flv1" | "wmv1" | "wmv2" | "wmv3" | "theora"
+        | "rv30" | "rv40" | "h261" | "amv" | "dnxhd" => "yuv420p",
+        "mjpeg" | "jpeg2000" | "svq1" | "svq3" => "yuvj420p",
+        "prores" => "yuv422p10le",
+        _ => "yuv420p",
+    }
+}
+
 // parse fps which could be in the form of "30", "29.97", or "30000/1001"
 fn parse_fps(value: &str) -> Option<u32> {
     let value = value.trim();
@@ -416,12 +446,16 @@ impl Job {
 
     pub async fn pix_fmt(&self) -> anyhow::Result<String> {
         let probe = self.primary_video_stream().await?;
-        if probe.pix_fmt.is_empty() {
-            anyhow::bail!(
-                "failed to get pixel format from ffprobe output for job {}",
-                self.id
+
+        if probe.pix_fmt.trim().is_empty() || probe.pix_fmt == "unknown" {
+            let fallback = default_pix_fmt_for_codec(&probe.codec_name);
+            warn!(
+                "ffprobe reported no pixel format for job {} (codec {}), assuming {}",
+                self.id, probe.codec_name, fallback
             );
+            return Ok(fallback.to_string());
         }
+
         Ok(probe.pix_fmt.clone())
     }
 

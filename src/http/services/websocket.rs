@@ -13,7 +13,11 @@ use crate::{
         fallback::{self, FailureKind, RetryOverrides},
         format::ConverterFormat,
         gpu::ConverterGPU,
-        job::{format_job_logs, push_log, snapshot_logs, Job, JobState, LogBuffer, ProgressUpdate},
+        job::{
+            format_job_logs, has_video_stream, push_log, snapshot_logs, Job, JobState, LogBuffer,
+            ProgressUpdate,
+        },
+        sequence::SequenceKind,
         speed::ConversionSpeed,
         ConversionSettings, Converter,
     },
@@ -77,6 +81,12 @@ async fn send_ws_message_timeout(session: &mut actix_ws::Session, message: Messa
             log::warn!("websocket send timed out, closing connection");
             false
         }
+    }
+}
+
+async fn try_send_ws_message(session: &mut actix_ws::Session, message: Message) {
+    if !send_ws_message_timeout(session, message).await {
+        log::warn!("could not deliver websocket message, client is probably gone");
     }
 }
 
@@ -588,16 +598,29 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                     }
                                 }
                             });
-                            if !send_ws_message(
+
+                            // report job setup (ffprobe) failures to discord webhook as well
+                            log::error!("job {} failed during setup: {e:#}", job_id);
+                            let error_message = format!("failed to convert: {e:#}");
+
+                            try_send_ws_message(
                                 &mut session,
                                 Message::Error {
-                                    message: format!("failed to convert: {}", e),
+                                    message: error_message.clone(),
                                 },
                             )
-                            .await
-                            {
-                                break;
-                            }
+                            .await;
+
+                            let from = job.from.clone();
+                            let to = to.to_string();
+
+                            tokio::spawn(async move {
+                                if let Err(e) =
+                                    handle_job_failure(job_id, from, to, error_message).await
+                                {
+                                    log::error!("failed to handle job failure: {e:#}");
+                                }
+                            });
 
                             continue;
                         }
@@ -624,7 +647,6 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         != "false",
                 );
                 let mut job_cancelled = false;
-                let mut disconnected_while_waiting = false;
                 let mut process_opt = Some(process);
                 'conversion: loop {
                     // store process in case user wants to cancel
@@ -699,25 +721,24 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                     }
 
                     if !conversion_finished {
-                        log::warn!("job {} cancelled or websocket closed", job_id);
-
-                        // ws closed or job cancelled, clean up and exit outer loop
                         let process_to_kill = {
                             let mut app_state = APP_STATE.lock().await;
                             app_state.active_processes.remove(&job_id)
                         };
 
-                        if let Some(mut process) = process_to_kill {
-                            if let Err(e) = process.kill().await {
-                                log::error!("failed to kill process for job {}: {}", job_id, e);
-                            } else {
-                                log::info!("killed process for job {}", job_id);
-                            }
-                        }
-
-                        // TODO: possibly allow reconnection to websocket within certain timeframe?
-                        // would need VERT ui changes, probably temporarily store job info in browser if refresh/other reasons?
                         if job_cancelled {
+                            log::warn!("job {} cancelled, killing process", job_id);
+
+                            if let Some(mut process) = process_to_kill {
+                                if let Err(e) = process.kill().await {
+                                    log::error!("failed to kill process for job {}: {}", job_id, e);
+                                } else {
+                                    log::info!("killed process for job {}", job_id);
+                                }
+                            }
+
+                            // TODO: possibly allow reconnection to websocket within certain timeframe?
+                            // would need VERT ui changes, probably temporarily store job info in browser if refresh/other reasons?
                             {
                                 let mut app_state = APP_STATE.lock().await;
                                 app_state.jobs.remove(&job_id);
@@ -731,9 +752,25 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                     );
                                 }
                             }
+
+                            break 'conversion;
                         }
 
-                        break 'conversion;
+                        log::warn!(
+                            "client disconnected while watching job {}, letting it finish",
+                            job_id
+                        );
+
+                        match process_to_kill {
+                            Some(process) => {
+                                process_opt = Some(process);
+                            }
+                            None => {
+                                // nothing left to wait on, the process already exited
+                                log::warn!("job {} has no process to wait for", job_id);
+                                break 'conversion;
+                            }
+                        }
                     }
 
                     // check process exit status to update job state
@@ -759,23 +796,26 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                                         }
                                         Some(Ok(AggregatedMessage::Ping(payload))) => {
                                             if session.pong(payload).await.is_err() {
-                                                disconnected_while_waiting = true;
                                                 terminate = true;
                                             }
                                         }
                                         Some(Ok(AggregatedMessage::Pong(_))) => {}
                                         Some(Ok(AggregatedMessage::Close(_))) | Some(Err(_)) | None => {
-                                            disconnected_while_waiting = true;
                                             terminate = true;
                                         }
                                         Some(Ok(_)) => {}
                                     }
                                     if terminate {
-                                        if let Err(e) = process.kill().await {
-                                            log::error!("failed to kill waiting process for job {}: {}", job_id, e);
-                                        }
                                         if job_cancelled {
+                                            if let Err(e) = process.kill().await {
+                                                log::error!("failed to kill waiting process for job {}: {}", job_id, e);
+                                            }
                                             let _ = send_ws_message(&mut session, Message::JobCancelled { job_id }).await;
+                                        } else {
+                                            log::warn!(
+                                                "client disconnected while waiting on job {}, letting it finish",
+                                                job_id
+                                            );
                                         }
                                         break process.wait().await;
                                     }
@@ -812,17 +852,34 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                         }
                         break 'conversion;
                     }
-                    if disconnected_while_waiting {
-                        break 'conversion;
-                    }
 
                     // check if output/{}.{} exists and isn't empty
-                    let is_empty = fs::metadata(&format!("output/{}.{}", job_id, to))
+                    let output_path = format!("output/{}.{}", job_id, to);
+                    let is_empty = fs::metadata(&output_path)
                         .await
                         .map(|m| m.len() == 0)
                         .unwrap_or(true);
 
-                    if is_empty || !process_succeeded {
+                    // check if output actually has a video stream
+                    let expects_video = !matches!(
+                        to,
+                        ConverterFormat::GIF | ConverterFormat::WEBP | ConverterFormat::APNG
+                    ) && job.sequence_kind() != Some(SequenceKind::FrameSequence);
+                    let missing_video = !is_empty
+                        && expects_video
+                        && !has_video_stream(&output_path).await.unwrap_or(true);
+
+                    if missing_video {
+                        push_log(
+                            retry.current_logs(),
+                            "output has no video stream (the input may be corrupt or undecodable)"
+                                .to_string(),
+                            1,
+                        )
+                        .await;
+                    }
+
+                    if is_empty || missing_video || !process_succeeded {
                         if let Some((new_rx, new_process)) = retry
                             .start_next(&converter, &mut job, vaapi_device_path.as_deref())
                             .await
@@ -854,16 +911,13 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
 
                         let error_message = attempt_report(&retry.attempts).await;
 
-                        if !send_ws_message(
+                        try_send_ws_message(
                             &mut session,
                             Message::Error {
                                 message: error_message.clone(),
                             },
                         )
-                        .await
-                        {
-                            break 'conversion;
-                        }
+                        .await;
 
                         let from = job.from.clone();
                         let to = to.to_string().to_string();
@@ -872,7 +926,7 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
                             if let Err(e) =
                                 handle_job_failure(job_id, from, to, error_message.clone()).await
                             {
-                                log::error!("failed to handle job failure: {}", e);
+                                log::error!("failed to handle job failure: {e:#}");
                             }
                         });
                     } else {
@@ -938,13 +992,73 @@ pub async fn websocket(req: HttpRequest, stream: web::Payload) -> Result<HttpRes
     Ok(res)
 }
 
+const WEBHOOK_MAX_ATTEMPTS: usize = 5;
+
+fn discord_retry_after(error: &str) -> Option<u64> {
+    // "Format Error: {"message": "You are being rate limited.", "retry_after": 1.25, "global": false}"
+    if !error.contains("rate limited") {
+        return None;
+    }
+    let (_, rest) = error.split_once("\"retry_after\"")?;
+    let (_, value) = rest.split_once(':')?;
+    let number: String = value
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    let seconds = number.parse::<f64>().ok()?;
+    Some((seconds * 1000.0).ceil() as u64)
+}
+
+async fn send_webhook_with_retry(
+    client: &DiscordWebhook,
+    message: &message::Message,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> anyhow::Result<()> {
+    for attempt in 1..=WEBHOOK_MAX_ATTEMPTS {
+        match client.send_with_files(message, files.clone()).await {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                let error = e.to_string();
+                let Some(retry_after_ms) = discord_retry_after(&error) else {
+                    // not a rate limit, retrying won't help
+                    return Err(anyhow::anyhow!("{error}"));
+                };
+
+                if attempt == WEBHOOK_MAX_ATTEMPTS {
+                    return Err(anyhow::anyhow!(
+                        "discord is still rate limiting after {} attempts: {}",
+                        WEBHOOK_MAX_ATTEMPTS,
+                        error
+                    ));
+                }
+
+                let delay = tokio::time::Duration::from_millis(retry_after_ms.max(250));
+                log::warn!(
+                    "discord webhook rate limited, retrying in {}ms (attempt {}/{})",
+                    delay.as_millis(),
+                    attempt,
+                    WEBHOOK_MAX_ATTEMPTS
+                );
+                tokio::time::sleep(delay).await;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 async fn handle_job_failure(
     job_id: Uuid,
     from: String,
     to: String,
     logs: String,
 ) -> anyhow::Result<()> {
-    let client_url = std::env::var("WEBHOOK_URL")?;
+    let client_url = std::env::var("WEBHOOK_URL").unwrap_or_default();
+    anyhow::ensure!(
+        !client_url.trim().is_empty(),
+        "WEBHOOK_URL is not configured"
+    );
     let mentions = std::env::var("WEBHOOK_PINGS").unwrap_or_else(|_| "".to_string());
 
     let mut files = BTreeMap::new();
@@ -961,7 +1075,7 @@ async fn handle_job_failure(
         })
     });
 
-    client.send_with_files(&message, files).await?;
+    send_webhook_with_retry(&client, &message, &files).await?;
 
     Ok(())
 }
