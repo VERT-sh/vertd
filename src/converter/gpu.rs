@@ -21,7 +21,6 @@ impl ConverterGPU {
         "vp9",
         "vp8",
         "mpeg2video",
-        "mpeg4",
         "mjpeg",
         "prores",
     ];
