@@ -4,7 +4,7 @@ use super::{
     codecs, constraint::FormatConstraint, fallback::RetryOverrides, gpu::ConverterGPU, pixfmt,
     speed::ConversionSpeed, ConversionSettings,
 };
-use log::{info, warn};
+use log::{debug, info, warn};
 use strum_macros::{Display, EnumIter, EnumString};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumString, Display, EnumIter)]
@@ -625,6 +625,17 @@ impl Conversion {
                 Self::set_arg(&mut result, "-pix_fmt", pix_fmt.to_string());
             }
         }
+
+        // avi needs Annex B h264, so convert the bitstream when copying an AVCC source
+        if input_video_codec.contains("h264") {
+            if let Some(filter) = self.avi_copy_bitstream_filter(&video_encoder) {
+                debug!(
+                    "job {} copying h264 into {}, adding -bsf:v {}",
+                    job.id, self.to, filter
+                );
+                result.extend(["-bsf:v".to_string(), filter.to_string()]);
+            }
+        }
         let video_bitrate = Self::custom_value(&settings.video_bitrate)
             .and_then(|value| value.parse::<u64>().ok())
             .map_or(effective_bitrate, |kbps| kbps * 1_000);
@@ -658,6 +669,13 @@ impl Conversion {
                     job.id, stream.index, stream.codec_name, output_index, encoder
                 );
                 result.extend([format!("-c:a:{}", output_index), encoder.to_string()]);
+
+                // avi needs an explicit codec tag to accept copied ADTS AAC
+                if encoder == "copy" && stream.codec_name.eq_ignore_ascii_case("aac") {
+                    if let Some(tag) = self.avi_aac_codec_tag(encoder) {
+                        result.extend([format!("-tag:a:{}", output_index), tag.to_string()]);
+                    }
+                }
 
                 // webm + opus needs to be stereo
                 // "Invalid channel layout 4.0 for specified mapping family"
@@ -753,6 +771,22 @@ impl Conversion {
         }
 
         Ok((result, video_encoder))
+    }
+
+    fn is_avi_family(&self) -> bool {
+        matches!(self.to, ConverterFormat::AVI | ConverterFormat::DIVX)
+    }
+
+    // avi needs the bitstream filter for h264 if copying
+    // "no startcode found, use the video bitstream filter 'h264_mp4toannexb'"
+    fn avi_copy_bitstream_filter(&self, video_encoder: &str) -> Option<&'static str> {
+        (self.is_avi_family() && video_encoder == "copy").then_some("h264_mp4toannexb")
+    }
+
+    // avi needs the codec tag for ADTS AAC if copying
+    // "ADTS is only supported with codec tag 0x1610"
+    fn avi_aac_codec_tag(&self, audio_encoder: &str) -> Option<&'static str> {
+        (self.is_avi_family() && audio_encoder == "copy").then_some("0x1610")
     }
 
     async fn remux_args(
