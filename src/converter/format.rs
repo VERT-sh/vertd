@@ -513,7 +513,7 @@ impl Conversion {
                             "-map".to_string(),
                             "0:v:0".to_string(),
                             "-map".to_string(),
-                            "0:a:0".to_string(),
+                            format!("0:{}", audio_streams[0].index),
                         ]
                     };
                     args.extend(strict_experimental());
@@ -632,7 +632,8 @@ impl Conversion {
 
         let supports_audio =
             codecs::codec_support_for(self.to).is_some_and(|(_, audio)| !audio.is_empty());
-        if !supports_audio {
+        let silent_amv_audio = self.to == ConverterFormat::AMV && !has_usable_audio;
+        if !supports_audio || (audio_streams.is_empty() && !silent_amv_audio) {
             result.push("-an".to_string());
         } else {
             for (output_index, stream) in audio_streams.iter().enumerate() {

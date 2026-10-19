@@ -15,6 +15,7 @@ use tokio::sync::mpsc;
 
 pub mod codecs;
 pub mod constraint;
+pub mod decoders;
 pub mod fallback;
 pub mod format;
 pub mod gpu;

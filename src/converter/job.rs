@@ -7,7 +7,7 @@ use tokio::process::Command;
 use tokio::sync::{Mutex, OnceCell};
 use uuid::Uuid;
 
-use super::sequence;
+use super::{decoders, sequence};
 
 pub const FFPROBE_TIMEOUT: Duration = Duration::from_secs(60);
 pub const MAX_PROBE_ATTEMPTS: u8 = 3;
@@ -245,6 +245,32 @@ pub struct AudioStream {
     pub index: u32,
     #[serde(default)]
     pub codec_name: String,
+}
+
+// spatial audio codecs
+// iphones (16 and later) write these next to a normal stereo track that we can already handle, so prefer it
+fn is_spatial_codec(codec_name: &str) -> bool {
+    matches!(codec_name.to_lowercase().as_str(), "apple_apac")
+}
+
+// stable-sorts spatial audio tracks behind regular ones so the readable stereo track comes first
+fn prefer_non_spatial_audio(job_id: Uuid, mut streams: Vec<AudioStream>) -> Vec<AudioStream> {
+    let has_spatial = streams
+        .iter()
+        .any(|stream| is_spatial_codec(&stream.codec_name));
+
+    if streams.len() < 2 || !has_spatial {
+        return streams;
+    }
+
+    // sort_by_key is stable, so the relative order of each group is preserved
+    streams.sort_by_key(|stream| is_spatial_codec(&stream.codec_name));
+    log::info!(
+        "job {} has spatial audio streams, using {} as the primary audio track",
+        job_id,
+        streams[0].codec_name
+    );
+    streams
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
@@ -560,10 +586,12 @@ impl Job {
             .await
     }
 
+    // audio streams ffmpeg can actually decode, any that can be decoded first and others last
     pub async fn audio_streams(&self) -> anyhow::Result<Vec<AudioStream>> {
         Ok(self.audio_streams_probe().await?.clone())
     }
 
+    // probes audio streams, dropping only the ones ffmpeg has no decoder for
     async fn audio_streams_probe(&self) -> anyhow::Result<&Vec<AudioStream>> {
         self.audio
             .get_or_try_init(|| async {
@@ -587,7 +615,30 @@ impl Job {
                     serde_json::from_slice(&output.stdout).map_err(|error| {
                         anyhow::anyhow!("invalid audio stream metadata for {}: {}", path, error)
                     })?;
-                Ok(probe.streams)
+
+                let Some(decodable) = decoders::decodable_audio_codecs().await else {
+                    // decoder listing failed, assume every stream can be decoded
+                    return Ok(prefer_non_spatial_audio(self.id, probe.streams));
+                };
+
+                let streams = probe
+                    .streams
+                    .into_iter()
+                    .filter(|stream| {
+                        let codec = stream.codec_name.to_lowercase();
+                        // an empty codec name is odd, keep it instead of silently dropping audio
+                        let usable = codec.is_empty() || decodable.contains(&codec);
+                        if !usable {
+                            warn!(
+                                "job {} audio stream {} uses {} which the installed ffmpeg cannot decode, skipping it",
+                                self.id, stream.index, stream.codec_name
+                            );
+                        }
+                        usable
+                    })
+                    .collect::<Vec<AudioStream>>();
+
+                Ok(prefer_non_spatial_audio(self.id, streams))
             })
             .await
     }
@@ -602,7 +653,7 @@ impl Job {
         };
 
         let audio_codec = self
-            .audio_streams_probe()
+            .audio_streams()
             .await?
             .first()
             .map_or_else(|| "none".to_string(), |stream| stream.codec_name.clone());

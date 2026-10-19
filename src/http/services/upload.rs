@@ -149,7 +149,7 @@ pub async fn upload(mut payload: Multipart) -> Result<impl Responder, UploadErro
         let token = hex::encode(rand);
         let job_id = Uuid::new_v4();
 
-        info!("new file upload: {}", job_id);
+        info!("new file upload: {}.{}", job_id, ext);
 
         let input_path = format!("input/{}.{}", job_id, ext);
         let mut pending = PendingUpload {
@@ -179,8 +179,8 @@ pub async fn upload(mut payload: Multipart) -> Result<impl Responder, UploadErro
         drop(pending.file.take());
 
         info!(
-            "file uploaded successfully ({} bytes): {}",
-            uploaded_bytes, job_id
+            "file uploaded successfully ({} bytes): {}.{}",
+            uploaded_bytes, job_id, ext
         );
 
         // drop the field to avoid deadlock when calling `payload.next()` while a `Field` is still alive
